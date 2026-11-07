@@ -13,7 +13,8 @@
     "typecheck": "tsc -p apps/daemon --noEmit && tsc -p packages/shared --noEmit && pnpm --filter @companion/web typecheck",
     "test": "vitest run",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
-    "smoke": "pnpm --filter @companion/web smoke"
+    "smoke": "pnpm --filter @companion/web smoke",
+    "acp-hello": "pnpm --filter @companion/daemon acp-hello"
   },
   "devDependencies": {
     "eslint": "^9",

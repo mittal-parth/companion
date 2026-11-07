@@ -4,5 +4,14 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "scripts": {
+    "acp-hello": "node src/acp-hello.ts"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^2.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2"
   }
 }
