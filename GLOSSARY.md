@@ -12,6 +12,14 @@ _Avoid_: agent, assistant, engine
 The ACP process that runs a turn. OpenCode is the default engine.
 _Avoid_: bot, harness, model
 
+**Provider**:
+The API an engine calls to run a model. Models on one provider share that API's message shape.
+_Avoid_: engine, model
+
+**Model**:
+The weights a turn runs. More than one provider can serve the same model.
+_Avoid_: engine, provider, bot
+
 **Harness**:
 The model-and-tool loop inside an engine: one prompt, tool execution, permission checks, and the session updates that result.
 _Avoid_: daemon, bot

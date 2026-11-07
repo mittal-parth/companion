@@ -4,5 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^2.4.0"
   }
 }

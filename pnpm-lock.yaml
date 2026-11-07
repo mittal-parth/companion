@@ -29,6 +29,9 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: ^2.4.0
         version: 2.4.0(@modelcontextprotocol/server@2.4.0)(zod@4.6.7)
+      '@companion/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
     devDependencies:
       '@types/node':
         specifier: ^24.19.2
@@ -92,7 +95,11 @@ importers:
         specifier: ^5
         version: 5.9.3
 
-  packages/shared: {}
+  packages/shared:
+    dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: ^2.4.0
+        version: 2.4.0(@modelcontextprotocol/server@2.4.0)(zod@4.6.7)
 
 packages:
 

@@ -31,7 +31,7 @@ OpenCode 2.2.6 answered on protocol 1. With no login, it picked the model `openc
 
 The script then swaps the temp path for `{workspace}`, writes the file, kills OpenCode, and deletes the folder. Those steps are not ACP messages.
 
-The saved file is `apps/daemon/fixtures/opencode-hello.json`. It stores what OpenCode sent. That is the replies to the three messages, and the notes in `updates`. It does not store what the script sent. The prompt text is not in the file. If OpenCode had asked before using the tool, `permissions` would store that question and the script's answer. This run did not ask, so that list is empty. If OpenCode does ask on a later run, the script allows the call once so the recording can include the result. The approval card is task 1.4.
+The saved file is `apps/daemon/fixtures/opencode-hello.json`. It stores what OpenCode sent on this run, plus the session fields later runs added. It does not store what the script sent. The prompt text is not in the file. This first run did not ask before the tool. Later runs added `agent_thought_chunk`, an `effort` option, and `thoughtTokens`. A later read of `.env` did ask, and that question and the rejection are in `permissions`. A denied tool call is a `tool_call_update` with status `failed`. A cancelled turn stops with `cancelled`.
 
 Tests read this file. They do not start OpenCode.
 

@@ -9,23 +9,12 @@ import { dirname, join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
+import type { RecordedSession } from "@companion/shared";
 
 /** The word note.txt contains. The reply has to come back with this word. */
 export const noteWord = "marigold";
 
-const prompt = `Read note.txt in the working directory with a file-reading tool, then reply with only the exact word in that file.`;
-
-/** One recorded OpenCode turn: the initialize result, the session, and the prompt stream. */
-export type RecordedSession = {
-  initialize: acp.InitializeResponse;
-  newSession: acp.NewSessionResponse;
-  updates: acp.SessionUpdate[];
-  permissions: Array<{
-    request: acp.RequestPermissionRequest;
-    response: acp.RequestPermissionResponse;
-  }>;
-  prompt: acp.PromptResponse;
-};
+const notePrompt = `Read note.txt in the working directory with a file-reading tool, then reply with only the exact word in that file.`;
 
 /**
  * Chooses a one-time allow when the engine asks to run a tool.
@@ -158,7 +147,7 @@ export async function runAcpHello(options: {
         return ctx.buildSession(workspace).withSession(async (session) => {
           console.log(`session ${session.sessionId}`);
           const updates: acp.SessionUpdate[] = [];
-          const pending = session.prompt(prompt);
+          const pending = session.prompt(notePrompt);
           let promptResult: acp.PromptResponse | undefined;
           while (!promptResult) {
             const message = await session.nextUpdate();
@@ -204,6 +193,7 @@ export function redactWorkspace<T>(value: T, workspace: string): T {
   return JSON.parse(json) as T;
 }
 
+/** Writes a session fixture, and refuses a file that looks like it contains a secret. */
 async function writeRecording(
   recordPath: string,
   session: RecordedSession,

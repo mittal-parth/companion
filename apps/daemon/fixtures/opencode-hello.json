@@ -92,6 +92,32 @@
         ]
       },
       {
+        "id": "effort",
+        "name": "Effort",
+        "description": "Available effort levels for this model",
+        "category": "thought_level",
+        "type": "select",
+        "currentValue": "default",
+        "options": [
+          {
+            "value": "low",
+            "name": "Low"
+          },
+          {
+            "value": "medium",
+            "name": "Medium"
+          },
+          {
+            "value": "high",
+            "name": "High"
+          },
+          {
+            "value": "default",
+            "name": "Default"
+          }
+        ]
+      },
+      {
         "id": "mode",
         "name": "Session Mode",
         "category": "mode",
@@ -133,6 +159,22 @@
         }
       ],
       "sessionUpdate": "available_commands_update"
+    },
+    {
+      "content": {
+        "text": "The user wants me to read note.txt in the working directory and",
+        "type": "text"
+      },
+      "messageId": "msg_1b763698e001AJ446b3Lom4rW6:reasoning:0",
+      "sessionUpdate": "agent_thought_chunk"
+    },
+    {
+      "content": {
+        "text": " reply with only the exact word in that file. Let me read it.",
+        "type": "text"
+      },
+      "messageId": "msg_1b763698e001AJ446b3Lom4rW6:reasoning:0",
+      "sessionUpdate": "agent_thought_chunk"
     },
     {
       "toolCallId": "chatcmpl-tool-8cb6cf0db2bbbe14",
@@ -192,6 +234,34 @@
       "sessionUpdate": "agent_message_chunk"
     },
     {
+      "toolCallId": "chatcmpl-tool-87b5146b309e23c9",
+      "kind": "read",
+      "status": "failed",
+      "title": "read",
+      "content": [
+        {
+          "content": {
+            "text": "The user declined this tool call",
+            "type": "text"
+          },
+          "type": "content"
+        }
+      ],
+      "locations": [
+        {
+          "path": "{workspace}/.env"
+        }
+      ],
+      "rawInput": {
+        "path": "{workspace}/.env"
+      },
+      "rawOutput": {
+        "metadata": {},
+        "error": "The user declined this tool call"
+      },
+      "sessionUpdate": "tool_call_update"
+    },
+    {
       "used": 6430,
       "size": 200000,
       "cost": {
@@ -201,15 +271,64 @@
       "sessionUpdate": "usage_update"
     }
   ],
-  "permissions": [],
+  "permissions": [
+    {
+      "request": {
+        "sessionId": "ses_e4892c21cffeslxnL3jrwrpnv1",
+        "toolCall": {
+          "toolCallId": "chatcmpl-tool-87b5146b309e23c9",
+          "kind": "read",
+          "status": "pending",
+          "title": "{workspace}/.env",
+          "name": "read",
+          "locations": [
+            {
+              "path": "{workspace}/.env"
+            }
+          ],
+          "rawInput": {
+            "path": "{workspace}/.env"
+          }
+        },
+        "options": [
+          {
+            "optionId": "once",
+            "name": "Allow once",
+            "kind": "allow_once"
+          },
+          {
+            "optionId": "always",
+            "name": "Always allow",
+            "kind": "allow_always"
+          },
+          {
+            "optionId": "reject",
+            "name": "Reject",
+            "kind": "reject_once"
+          }
+        ]
+      },
+      "response": {
+        "outcome": {
+          "outcome": "selected",
+          "optionId": "reject"
+        }
+      }
+    }
+  ],
   "prompt": {
     "stopReason": "end_turn",
     "usage": {
       "inputTokens": 4648,
       "outputTokens": 80,
       "totalTokens": 12792,
+      "thoughtTokens": 29,
       "cachedReadTokens": 8064
     },
+    "_meta": {}
+  },
+  "cancel": {
+    "stopReason": "cancelled",
     "_meta": {}
   }
 }

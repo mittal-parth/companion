@@ -9,7 +9,8 @@
     "acp-hello": "node src/acp-hello.ts"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^2.4.0"
+    "@agentclientprotocol/sdk": "^2.4.0",
+    "@companion/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.19.2"

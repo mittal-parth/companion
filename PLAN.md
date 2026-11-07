@@ -6,13 +6,14 @@ An open-source alternative to Grok Bot, Duet, Dots and Muse, offered both self-h
 
 - Each user gets one cloud computer (an EC2 instance) shared by all their bots.
 - Bots run long tasks, browse and click, run user-defined schedules, and are reachable from web, Slack, Discord and later an app.
-- The managed default sends model calls to [Sarvam Token Factory](https://docs.sarvam.ai/api/token-factory) (OpenAI-compatible, `https://api.sarvam.ai/v2`). The user never handles an API key. Users who want to can bring their own key, and later their own subscription.
+- The managed default model is `glm5.3` on [Sarvam Token Factory](https://docs.sarvam.ai/api/token-factory) (OpenAI-compatible, `https://api.sarvam.ai/v2`). The user never handles an API key. Users who want to can bring their own key, and later their own subscription.
 - Tools connect through [Composio](https://docs.composio.dev/docs/authentication) OAuth, and keys never sit on the VM.
 - A non-technical user signs up in one click and it works.
 
 ### Decisions already made
 
-- **Engine protocol: ACP**, so no vendor lock-in. **Default engine: OpenCode.**
+- **Engine protocol: ACP**, so no vendor lock-in. **Default engine: OpenCode.** ACP's own methods are the interface (`session/prompt`, `session/update`, `session/cancel`, `session/load`, `session/request_permission`). A second method set would only rename them.
+- **Managed default model: `glm5.3`, served by Sarvam.** Other providers can serve GLM too. Sarvam is the one this service calls. The engine stays OpenCode when the model changes.
 - **Cloud: AWS** (credits), one EC2 instance per user, stopped when idle.
 - **Scheduler lives in our daemon**, not in any engine, so swapping an engine never loses schedules.
 - **Control plane database and login: Supabase** (Postgres, Google sign-in, and row-level security). Tables the browser reads directly (bots, thread index, schedules, usage shown to the user) get row-level security policies. Server-only tables (VM records, usage ledger, stored keys) have row-level security on with no policies, so only our backend can touch them. Our backend services (relay, LLM proxy, broker, provisioner) use the service key, which bypasses row-level security, so they check access in code. Migrations are plain SQL files, and policy tests prove one user can't read another's rows. Trade-off accepted: moving off Supabase later costs more, and self-hosting means running Supabase's open-source stack.
@@ -102,10 +103,10 @@ User's EC2 VM (hardened image):
 ## Phase 1: the engine on your laptop (learn ACP and OpenCode, no cloud)
 
 - **1.1 ACP hello.** A script using the TypeScript SDK that starts `opencode acp`, runs `initialize`, `session/new`, `session/prompt` and prints the streamed updates. _Done when:_ it prints a real reply and a tool call, and a recorded session is saved as a test fixture.
-- **1.2 Engine interface.** A narrow interface (`startTurn`, `events`, `cancel`, `resume`, `answerApproval`) with an OpenCode adapter over ACP and a fake engine for tests. _Done when:_ the same contract tests pass against both.
-- **1.3 Sarvam through OpenCode.** Configure a custom OpenAI-compatible provider ([OpenCode providers](https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/providers.mdx)) pointing at [Sarvam](https://docs.sarvam.ai/api/token-factory). _Done when:_ a turn with tool calls works, and we've recorded which Sarvam models handle tool calling reliably. This is also our first look at whether the managed default model is good enough.
-- **1.4 Approvals.** Map `session/request_permission` to our approval type ([OpenCode permissions](https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/permissions.mdx)). _Done when:_ a tool call blocks until answered and a denial stops the action (tested).
-- **1.5 Cancel and resume.** `session/cancel`, and `session/load` if OpenCode supports it. _Done when:_ a turn cancels cleanly and a thread continues after the engine process restarts.
+- **1.2 Engine interface.** Dropped. ACP is already the interface, and task 1.1 recorded OpenCode's `session/update` shape. A fake agent, when a later test needs one, can speak ACP in-process through the SDK.
+- **1.3 Sarvam through OpenCode.** Point OpenCode at Sarvam for one turn on `glm5.3`. The provider config is written into that run's temp workspace, and the key is read from `SARVAM_API_KEY`. _Done when:_ the turn includes a completed tool call. The new session fields from that run (`agent_thought_chunk`, the effort option, `thoughtTokens`) are folded into the hello fixture. No separate script is kept.
+- **1.4 Approvals.** Map `session/request_permission` to an approval the user allows or denies. The engine waits until that answer. A denial fails the tool call. _Done when:_ a test shows the tool stays blocked until answered, and a denial fails it. OpenCode's real question and the failed update are in the hello fixture.
+- **1.5 Cancel and resume.** `session/cancel` stops a turn. `session/load` continues that session after the engine process is replaced. _Done when:_ a test shows cancel stops a waiting turn, and a new connection loads the same session and prompts again. OpenCode did both: cancel stops with `cancelled`, and load then accepts another prompt.
 - **1.6 Thread store.** SQLite transcript built from the event stream plus each thread's resume state, since the engine's own history can't be relied on. _Done when:_ restarting the daemon restores a thread exactly.
 
 ## Phase 2: the daemon, bots and schedules (still local)
@@ -176,7 +177,7 @@ User's EC2 VM (hardened image):
 
 - Per task: its "done when" check, run in CI where it can be.
 - **Unit tests** for pure logic (schedule maths, metering) using a fake clock.
-- **Contract tests** for the engine interface, run against the fake engine and real OpenCode.
+- **A recorded session** for the OpenCode hello turn, including the thought chunk, effort option, and `thoughtTokens` seen on the Sarvam `glm5.3` turn. Tests read that file and do not start the engine.
 - **Integration tests** for the daemon with a real OpenCode process.
 - **End-to-end on a real EC2 instance** at the end of Phases 4, 5, 6 and 7: sign up, chat, create a schedule, stop the VM, confirm the wake and the result, confirm an approval blocks, confirm the usage counter moves and the limit fires.
 - **A standing model-fit set** of three real tasks (a daily tracking job, an email summary, a browser click-through), re-run whenever the default model changes.

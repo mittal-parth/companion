@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as acp from "@agentclientprotocol/sdk";
+import type { RecordedSession } from "@companion/shared";
 import { expect, test } from "vitest";
 import {
   allowOnce,
@@ -10,7 +11,6 @@ import {
   noteWord,
   redactWorkspace,
   replyText,
-  type RecordedSession,
 } from "./acp-hello.js";
 
 test("a one-time allow is preferred over always", () => {
@@ -60,7 +60,11 @@ test("the recorded OpenCode session has a reply and a tool call", () => {
     dirname(fileURLToPath(import.meta.url)),
     "../fixtures/opencode-hello.json",
   );
-  const session = JSON.parse(readFileSync(fixture, "utf8")) as RecordedSession;
+  const session = JSON.parse(
+    readFileSync(fixture, "utf8"),
+  ) as RecordedSession & {
+    prompt: { usage?: { thoughtTokens?: number } };
+  };
   expect(replyText(session.updates)).toContain(noteWord);
   expect(hasToolCall(session.updates)).toBe(true);
   expect(session.prompt.stopReason).toBe("end_turn");
@@ -68,4 +72,26 @@ test("the recorded OpenCode session has a reply and a tool call", () => {
     (update) => update.sessionUpdate === "tool_call",
   );
   expect(tool).toMatchObject({ name: "read", status: "pending" });
+  expect(
+    session.updates.some(
+      (update) => update.sessionUpdate === "agent_thought_chunk",
+    ),
+  ).toBe(true);
+  expect(session.prompt.usage).toMatchObject({ thoughtTokens: 29 });
+  expect(session.newSession.configOptions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: "effort", currentValue: "default" }),
+    ]),
+  );
+  expect(session.permissions[0]?.response).toEqual({
+    outcome: { outcome: "selected", optionId: "reject" },
+  });
+  const declined = session.updates.find(
+    (update) =>
+      update.sessionUpdate === "tool_call_update" && update.status === "failed",
+  );
+  expect(declined).toMatchObject({
+    rawOutput: { error: "The user declined this tool call" },
+  });
+  expect(session.cancel?.stopReason).toBe("cancelled");
 });
