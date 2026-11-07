@@ -1,43 +1,40 @@
-# Plan: cloud-first personal agents, a VM per user (new product, new repo)
-
-This replaces the earlier eve + Vercel plan. That plan is dropped.
+# Plan: cloud-first personal agents, a VM per user
 
 ## Context
 
-The goal is an open-source alternative to Grok Bot, Duet, Dots and Muse, built in the open and also offered as a managed service.
+An open-source alternative to Grok Bot, Duet, Dots and Muse, offered both self-hosted and as a managed service.
 
 - Each user gets one cloud computer (an EC2 instance) shared by all their bots.
 - Bots run long tasks, browse and click, run user-defined schedules, and are reachable from web, Slack, Discord and later an app.
-- The managed default sends model calls to Sarvam Token Factory. The user doesn't handle any API key. Users who want to can bring their own key, or later their own subscription.
-- Tools connect through Composio OAuth, and keys never sit on the VM.
+- The managed default sends model calls to [Sarvam Token Factory](https://docs.sarvam.ai/api/token-factory) (OpenAI-compatible, `https://api.sarvam.ai/v2`). The user never handles an API key. Users who want to can bring their own key, and later their own subscription.
+- Tools connect through [Composio](https://docs.composio.dev/docs/authentication) OAuth, and keys never sit on the VM.
 - A non-technical user signs up in one click and it works.
 
-Research that shaped this:
-- eve can't host Claude Code or Codex as its loop, and its sessions don't fit a long-lived computer.
-- OpenMausBot and Hermes are the closest references. They run the agent next to the machine it controls, with a scheduler in the same daemon.
-- A **harness** is the part that runs one agent turn: the model-and-tool loop, tool execution and permission prompts, context assembly and compaction, session history with resume and cancel, and normalised streaming events. Schedules, channels, multi-user auth, metering, notifications and VM lifecycle are **not** part of a harness; they are product layers around it. That is why the scheduler lives in our daemon and every engine looks the same to it (`send(prompt)` into a thread).
-- OpenClaw is ruled out. Hermes is a full product (its own gateway, cron, memory, channels), so it can at most be one optional engine behind ACP, not the foundation.
-- The open harnesses worth testing as the default engine are **OpenCode** (MIT, `opencode serve` HTTP + SDK, ACP, allow/ask/deny permissions, MCP, custom OpenAI-compatible `baseURL`, and an experimental per-session scheduler) and **Pi** (MIT, minimal, SDK + RPC, custom OpenAI-compatible providers, no scheduler of its own). Goose (Apache-2.0, Rust, has a cron scheduler and an ACP server) is a third option.
-- The Vercel **AI SDK** (Apache-2.0) has two relevant layers. `ToolLoopAgent` is only a loop: no persistence, memory, approvals or scheduling. **`HarnessAgent`** (experimental) is a single interface over Claude Code, Codex, Cursor, Pi, OpenCode, Cline, Copilot and others, with a generic ACP adapter; it normalises streams, sessions with resume, approvals, skills and custom tools, and its streams feed `useChat`/ai-elements directly. Its only sandbox adapters today are Vercel and just-bash, so running it on our EC2 VMs needs a custom sandbox adapter or host-process mode.
-- Sarvam Token Factory is OpenAI-compatible (`https://api.sarvam.ai/v2`) but its docs show no per-key budgets or usage API. **We meter at our own proxy.**
+### Decisions already made
 
-## Requirements map
+- **Engine protocol: ACP**, so no vendor lock-in. **Default engine: OpenCode.**
+- **Cloud: AWS** (credits), one EC2 instance per user, stopped when idle.
+- **Scheduler lives in our daemon**, not in any engine, so swapping an engine never loses schedules.
+- **Control plane database and login: Supabase** (Postgres, Google sign-in, and row-level security). Tables the browser reads directly (bots, thread index, schedules, usage shown to the user) get row-level security policies. Server-only tables (VM records, usage ledger, stored keys) have row-level security on with no policies, so only our backend can touch them. Our backend services (relay, LLM proxy, broker, provisioner) use the service key, which bypasses row-level security, so they check access in code. Migrations are plain SQL files, and policy tests prove one user can't read another's rows. Trade-off accepted: moving off Supabase later costs more, and self-hosting means running Supabase's open-source stack.
+- Defaults I assumed (change any time): TypeScript throughout, the web app and API hosted on AWS to use credits (any host would work, since only the relay needs long-lived connections), a Node daemon on the VM, Graviton (ARM) instances for lower cost (Task 4.2 confirms every tool we ship has an ARM build, otherwise we switch to x86), infrastructure as code for all AWS resources.
 
-| # | Requirement | Covered by | Phase |
-|---|---|---|---|
-| 1 | Multiple bots, one computer | one VM, a folder per bot, one OS user | 2 |
-| 2 | See what the agent computer is doing | event stream + terminal/file view, then browser screencast | 1 / 4 |
-| 3 | Long-running tasks | daemon owns turns; VM never stops mid-turn | 1 |
-| 4 | Connect favourite tools by asking | Composio OAuth via the broker | 3 |
-| 5 | User-defined schedules | scheduler in the VM daemon + EC2 wake | 2 |
-| 6, 9, 15 | Bring your own harness/key/subscription, Sarvam default | engine drivers; the LLM proxy | 1 / later |
-| 7, 8, 17 | Cloud first on AWS; local optional | same daemon runs on a laptop or VPS | 1 / later |
-| 10 | Many channels, same bot | channel adapters mapped to bot threads | 1 (data model) / later |
-| 11 | Key security | keys only in the control plane; short-lived scoped VM tokens | 1 |
-| 12 | Browser control | Chromium + CDP on the VM | 4 |
-| 13 | Notifications | web push on turn done / approval needed | 2 |
-| 14 | Voice via Sarvam | channel adapter | later |
-| 16 | Usage limits, weekly resets | proxy token meter + VM-hour meter | 5 |
+### What a harness is, and what it isn't
+
+A **harness** runs one agent turn: the model-and-tool loop, tool execution and permission prompts, context assembly and compaction, session history with resume and cancel, and streamed events. **Not** part of a harness: schedules, channels, multi-user auth, metering, notifications, VM lifecycle. Those are the product we build around it.
+
+### ACP in one page
+
+The [Agent Client Protocol](https://agentclientprotocol.com/protocol/overview) ([spec repo](https://github.com/agentclientprotocol/agent-client-protocol), Apache-2.0) is an open JSON-RPC 2.0 protocol between a **client** (what editors like Zed are today) and an **agent** (a coding agent run as a subprocess, talking over stdio). In our system the **daemon is the client** and OpenCode is the agent.
+
+1. `initialize`: both sides announce their capabilities (for example whether the agent can reload old sessions).
+2. `session/new` (or `session/load` to resume): choose a working directory and hand the agent tool servers (MCP).
+3. `session/prompt`: send a user message. The agent streams `session/update` notifications back (text chunks, tool calls and their results, plans).
+4. When the agent wants to do something sensitive it calls `session/request_permission`. The client answers allow or reject. **This is our approval card and our push notification.**
+5. The turn ends when `session/prompt` returns a stop reason. `session/cancel` interrupts a turn.
+
+Why it helps us: one adapter in the daemon speaks to every ACP engine, including OpenCode, the [Claude](https://github.com/agentclientprotocol/claude-agent-acp) and [Codex](https://github.com/agentclientprotocol/codex-acp) adapters, and others listed in the [ACP registry](https://github.com/agentclientprotocol/registry). There is an official [TypeScript SDK](https://github.com/agentclientprotocol/typescript-sdk) (`@agentclientprotocol/sdk`). OpenCode runs as `opencode acp` ([docs](https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/acp.mdx)). OpenMausBot is a working example of the same approach (it drives many engines through ACP).
+
+Limits to keep in mind: each agent decides *when* to ask permission and which optional features it supports, so "swappable" means "swappable with possibly different guarantees". Tasks 1.1 to 1.5 check this for OpenCode specifically.
 
 ## Architecture
 
@@ -47,65 +44,137 @@ Clients: web (PWA), Slack, Discord, app later
 Control plane (web app + API + Postgres): auth, bots, threads, usage plans,
    push notifications, VM lifecycle, credential broker (Composio), LLM proxy
         │
-Relay: always-on websocket service; each VM dials OUT to it (no inbound ports)
-   + EventBridge Scheduler → Lambda → EC2 start (wake only)
+Relay: always-on websocket service (small container on ECS Fargate behind a load balancer,
+   in the control-plane AWS account); each VM dials OUT to it (no inbound ports)
+   + EventBridge Scheduler → EC2 start (wake only)
         │
-User's EC2 VM (hardened AMI):
-   daemon: scheduler (SQLite), thread store, approvals, engine driver,
-           browser (Chromium + CDP), live-view stream
+User's EC2 VM (hardened image):
+   daemon (ACP client): bot + thread store (SQLite), scheduler, approval broker,
+                        browser (Chromium + CDP), live-view stream
    /bots/<id>/  (files, memory)   +   /shared
-   engine (swappable, behind one interface): default chosen in Phase 0 → our LLM proxy
-          (Sarvam / user key); Claude Code / Codex / Cursor via the user's own login later
+   engine: OpenCode over ACP → our LLM proxy (Sarvam / user key)
 ```
 
-**Trust boundary.** Because every bot shares the user's logins, the VM is the security boundary and bots are not (the same stance as Grok Bot). The MVP uses one OS user with a folder per bot.
+**Trust boundary.** Every bot shares the user's logins, so the VM is the security boundary and bots are not (the same stance as Grok Bot). Bots get separate folders, not separate OS users.
 
 **Key custody and metering.**
 - Sarvam and Composio keys live only in the control plane.
-- The VM gets a short-lived token for the LLM proxy. The proxy counts tokens per user per week and returns 429 at the limit.
-- Composio calls go through the broker with `user_id` fixed, since a project key could otherwise act for any user.
+- The VM gets a short-lived token for the LLM proxy. The proxy counts tokens per user per week and returns 429 at the limit. Sarvam's docs show no per-key budgets or usage API, so the metering is ours.
+- Composio calls go through our broker with the user ID fixed ([users and sessions](https://docs.composio.dev/tool-router/users-and-sessions)), because a project key could otherwise act for any user.
 - Users on their own subscription bypass the proxy; only VM time is metered for them.
 
-**Subscription logins on managed VMs.** Unresolved. Default: managed users bring an API key, and subscription logins work in self-hosted mode only, until Anthropic's and OpenAI's current terms for third-party-hosted subscription CLIs are checked.
+**VM safety baseline.** No instance role, IMDSv2 required ([docs](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-options.html)), no inbound ports, user VMs in a separate AWS account from the control plane.
 
-**What to keep from this repo.** Start a new repo. Port the Supabase auth approach, the web chat UI components (`apps/web/components/ai-elements`, shadcn) and the Discord gateway-relay pattern from `daemon/`. Drop eve, the Vercel Drive idea and the Supabase schedule dispatcher. Leave the uncommitted chats work here as it is.
+**Schedules.** Jobs live in the daemon's SQLite with [croner](https://github.com/Hexagon/croner) for timing. Each firing sends the prompt into the bot's thread. A raw crontab entry is not used because we need catch-up, run receipts and thread routing. Design references: Hermes's [cron internals](https://github.com/NousResearch/hermes-agent/blob/HEAD/cron/AGENTS.md) (catch-up windows, at-most-once dispatch) and OpenMausBot's [routine docs](https://github.com/milind-soni/OpenMausBot/blob/HEAD/docs/routine-schedules.md). A stopped VM can't fire jobs, so the control plane creates a one-time [EventBridge Scheduler](https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-targets-universal.html) entry that starts the instance a minute early.
 
-## Harness layer: what we build and what we borrow
+## Requirements map
 
-**We build (the daemon, identical for every engine):** bot and thread store (it keeps its own transcript from the engine's event stream, and each thread's resume state, because no AI SDK adapter exposes history), the scheduler (SQLite job table, `croner`, catch-up window, run receipts; each firing sends the prompt into the bot's thread), the approval broker, channel adapters, usage reporting, the browser and live view.
+| # | Requirement | Where it lands |
+|---|---|---|
+| 1 | Multiple bots, one computer | Phase 2 |
+| 2 | See what the agent computer is doing | Tasks 3.4, 7.2 |
+| 3 | Long-running tasks | Task 2.7 |
+| 4 | Connect tools by asking | Phase 6 |
+| 5 | User-defined schedules | Tasks 2.3 to 2.6, 4.6 |
+| 6, 9, 15 | Bring your own engine/key/subscription; Sarvam default | Tasks 1.3, 5.1, 5.5, 9.3 |
+| 7, 8, 17 | Cloud first on AWS; local optional | Phase 4; Task 9.4 |
+| 10 | Many channels, same bot | thread model in 0.3; Tasks 9.1, 9.2 |
+| 11 | Key security | Tasks 4.2, 5.1, 6.1 |
+| 12 | Browser control | Phase 7 |
+| 13 | Notifications | Task 8.1 |
+| 14 | Voice via Sarvam | Task 9.5 |
+| 16 | Usage limits, weekly resets | Phase 5 |
 
-**We borrow:** one engine behind a narrow interface (`startTurn`, `stream events`, `cancel`, `resume`, `answerApproval`). Two ways to supply that interface:
+## How we work
 
-- **A. AI SDK `HarnessAgent`.** Ready-made adapters for most engines and AI SDK stream shapes the web UI already understands. Costs: it is experimental, and it needs a custom adapter for our VM.
-- **B. ACP directly** (the route OpenMausBot takes). An open protocol, so no dependence on an experimental package, but we write the normalisation ourselves.
+- **One task at a time.** Each task is small enough for one pull request. It ends with a "done when" check that runs, and I don't start the next task until that check passes.
+- **Every task leaves a short explainer** (a page under `docs/`) saying what was built and why, and I walk you through it before we move on, so you understand each piece.
+- Each task adds its own tests. A bug found later gets a regression test first, then the fix.
 
-Two limits to check in spike 1 before choosing A:
-- **Where the engine runs.** AI SDK adapters split into *host process* (Pi, Cline, fx), which can run inside our daemon on the VM, and *sandbox bridge* (Claude Code, Codex, OpenCode), which the docs say need a "real network sandbox". Only Vercel and just-bash sandbox adapters ship today. If a bridge adapter can't target the VM it runs on, the pairing becomes Pi through `HarnessAgent` and OpenCode driven directly through `opencode serve` and its SDK.
-- **Approvals are not uniform.** Built-in tool approval is missing for the Codex, Cursor, Copilot and Grok Build adapters. For those engines the daemon has to gate tools itself, or requirement 13 (block until approved) can't be met. "Swappable" therefore means "swappable with different approval guarantees".
+## Phase 0: foundations (no cloud)
 
-Default: try A first; fall back to B if the adapter can't run on the VM or breaks between releases. Keep our own interface in between either way, so the choice stays reversible. Schedules stay in the daemon rather than in any engine's own scheduler, so swapping an engine never loses them. A raw crontab entry is not used: the daemon needs catch-up, receipts and thread routing, which crontab lacks.
+- **0.1 Repo and tooling.** Monorepo (web app, daemon, shared types), lint, typecheck, test runner, CI. *Done when:* CI is green on a trivial test.
+- **0.2 Control plane skeleton.** Web app on Supabase (Postgres + Google sign-in), a protected page, a health route, migrations as SQL files, and a first row-level security policy with a test that a second user can't read the first user's row. *Done when:* sign in and out work locally, an unauthenticated request is rejected, and the policy test passes.
+- **0.3 Shared vocabulary.** Our own types for bot, thread, message, event, approval, schedule, with schemas and a version field. Threads are separate from channels from the start. *Done when:* schema tests pass and sample events round-trip.
 
-## Phase 0: spikes (go / no-go before building anything else)
+## Phase 1: the engine on your laptop (learn ACP and OpenCode, no cloud)
 
-1. **Pick the default engine and the interface.** Candidates: OpenCode, Pi, Goose; via AI SDK `HarnessAgent` and via ACP. Each runs headless on EC2 against the Sarvam proxy. **Pass:** a chat turn, a daemon-fired scheduled run and an approval that blocks a tool call until the user decides, all working, with usage reported to the proxy. Also record: custom `baseURL` for Sarvam works, image input works for the browser task, and the engine can be given a non-coding system prompt for everyday tasks. Read how qm wires Pi first.
-2. **Model quality gates the managed default.** Run three real tasks through the engine, the proxy and Sarvam: a daily tracking job, a Gmail summary via Composio, and a browser click-through. Browser control needs image input, which Sarvam lists only for GLM-5.3 Flash and Gemma 4. **If these fail, the subsidy plan changes, so nothing downstream is committed before this.**
-3. **VM lifecycle numbers.** Measure instance-start to daemon-ready for plain stop vs hibernate. Check that Chromium + a virtual desktop + several bots fit in 4 GB. Check that bring-your-own CLIs ship linux-arm64 before committing to Graviton.
-4. **Relay choice:** our own websocket service versus a managed broker VMs dial out to (API Gateway WebSocket or IoT Core). Prefer whichever means fewer always-on services.
-5. **Terms check:** Anthropic and OpenAI rules for running consumer-subscription CLIs on machines we host.
+- **1.1 ACP hello.** A script using the TypeScript SDK that starts `opencode acp`, runs `initialize`, `session/new`, `session/prompt` and prints the streamed updates. *Done when:* it prints a real reply and a tool call, and a recorded session is saved as a test fixture.
+- **1.2 Engine interface.** A narrow interface (`startTurn`, `events`, `cancel`, `resume`, `answerApproval`) with an OpenCode adapter over ACP and a fake engine for tests. *Done when:* the same contract tests pass against both.
+- **1.3 Sarvam through OpenCode.** Configure a custom OpenAI-compatible provider ([OpenCode providers](https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/providers.mdx)) pointing at Sarvam. *Done when:* a turn with tool calls works, and we've recorded which Sarvam models handle tool calling reliably. This is also our first look at whether the managed default model is good enough.
+- **1.4 Approvals.** Map `session/request_permission` to our approval type ([OpenCode permissions](https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/permissions.mdx)). *Done when:* a tool call blocks until answered and a denial stops the action (tested).
+- **1.5 Cancel and resume.** `session/cancel`, and `session/load` if OpenCode supports it. *Done when:* a turn cancels cleanly and a thread continues after the engine process restarts.
+- **1.6 Thread store.** SQLite transcript built from the event stream plus each thread's resume state, since the engine's own history can't be relied on. *Done when:* restarting the daemon restores a thread exactly.
 
-## Phases
+## Phase 2: the daemon, bots and schedules (still local)
 
-1. **One VM, one bot.** Control plane skeleton, EC2 provisioner, daemon with the chosen engine, relay, web chat, persistent files, an LLM proxy that records usage. Baseline safety from day one: no instance role, IMDSv2 required, user VMs in a separate AWS account. Data model with threads separate from channels, so req. 10 needs no migration later.
-2. **Many bots and schedules.** Multiple bots on one VM, the daemon scheduler (SQLite, catch-up window, run receipts, results posted into the bot's thread), EventBridge wake, web push. Idle stop only when no turn is running, nobody is watching live, and no schedule is due within N minutes. Design the "waking your computer" state for the 30–60 s cold start.
-3. **Connections and approvals.** Composio broker, approval cards that block until the user decides, an audit log.
-4. **Browser and live view.** Chromium with CDP, a screencast stream, user takeover for logins and captchas.
-5. **Limits and onboarding.** Weekly-reset plans for tokens and VM hours, one-click signup, egress controls. **All of this before any outside user.**
+- **2.1 Daemon API.** Local API to create a bot and thread, send a message and stream events. *Done when:* an integration test drives a full turn through it.
+- **2.2 Multiple bots.** A folder per bot, per-bot instructions and memory file, several bots at once. *Done when:* two bots keep separate files and context (tested).
+- **2.3 Schedule maths.** Job model, cron with timezone, next-run computation, as pure functions. *Done when:* unit tests pass, including daylight-saving changes and invalid input.
+- **2.4 Scheduler runtime.** Tick loop, fire a job by sending its prompt into the bot's thread, record a receipt, never fire twice for one occurrence. *Done when:* a fake-clock test shows exactly-once firing.
+- **2.5 Catch-up.** After downtime, run a missed occurrence once if it is within a window, otherwise skip and record it. *Done when:* fake-clock tests cover restart, long outage and paused jobs.
+- **2.6 Agent-managed schedules.** The daemon hosts a small tool server (MCP) with create, list, pause and delete schedule, passed to the engine in `session/new` ([OpenCode MCP](https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/mcp-servers.mdx)). *Done when:* saying "every day at 9, do X" creates the job. If OpenCode's ACP mode doesn't pass tool servers through, we find that out here.
+- **2.7 Long tasks and reconnect.** A turn keeps running with no client connected, and a client that reconnects replays missed events. *Done when:* a multi-minute turn survives a client disconnect (tested).
 
-Later: Slack and Discord, bring-your-own harness via ACP, self-host provisioner and local mode, voice via Sarvam, mobile app.
+## Phase 3: web chat against the local daemon
 
-## Verification
+- **3.1 Chat.** Send a message and stream the reply. *Done when:* end-to-end browser test passes.
+- **3.2 Bots, threads and schedules in the UI.** List and switch bots and threads, view, pause and resume schedules. *Done when:* a scheduled result appears in the right thread.
+- **3.3 Approval cards.** Allow or deny from the UI. *Done when:* denying in the UI stops the tool call (tested end to end).
+- **3.4 Activity view.** Live tool calls, file changes and command output. *Done when:* a running turn shows each step as it happens.
 
-- Phase 0 is itself the verification, with the pass criteria above, recorded in a short results note per spike.
-- Each phase ends with an end-to-end run on a real EC2 instance: sign up, chat, create a schedule, stop the VM, confirm the wake and the scheduled result in the thread, confirm an approval pauses the action, confirm the usage counter moves and the 429 fires at the limit.
-- Evals from the start (extending the habit in AGENTS.md): the three Phase 0 tasks become a standing regression set run against each model option.
+## Phase 4: one VM in the cloud
 
+- **4.1 AWS foundation.** Separate account for user VMs, network, roles, budget alarms, all as code. *Done when:* a test budget alarm fires and the stack can be torn down and rebuilt.
+- **4.2 Base image.** Hardened machine image with daemon and OpenCode, IMDSv2 required, no instance role, no inbound ports, built by a pipeline. First confirm every tool in the image has a Linux ARM build (OpenCode does; check Chromium and anything else we add), otherwise build the image for x86. *Done when:* a launched instance reports ready and a script confirms the safety settings.
+- **4.3 Relay.** A small websocket service on [ECS Fargate](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/Welcome.html) behind an Application Load Balancer, in the control-plane account. The daemon dials out and the web client connects; events and approvals route through, authenticated with short-lived tokens. One instance at first; adding more later needs a shared message bus between instances. It can't be serverless-function hosting, because it holds long-lived connections. We skip API Gateway WebSockets because its connections are capped at 2 hours with a 10-minute idle timeout and 128 KB messages ([quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-execution-service-websocket-limits-table.html)), which suits live-view frames poorly. *Done when:* the web chat from Phase 3 works against the cloud VM, and a dropped connection reconnects without losing events.
+- **4.4 Provisioning.** Create a VM on signup, record it, delete it on request. *Done when:* a new user gets a working VM without manual steps.
+- **4.5 Lifecycle.** Stop when idle (no running turn, nobody watching, no job due soon); start on message with a "waking your computer" state. Measure cold start for plain stop against [hibernation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/hibernating-prerequisites.html) (which must be enabled at launch) and check memory use with several bots. *Done when:* an idle VM stops and a message wakes it, with measured times recorded.
+- **4.6 Wake for schedules.** EventBridge one-time wake entries kept in sync with the daemon's next-run times. *Done when:* a stopped VM wakes before a job and the job runs.
+- **4.7 Backups.** Disk snapshots and a restore test. *Done when:* a restored VM has the bot's files and threads.
+
+## Phase 5: keys, models and metering
+
+- **5.1 LLM proxy.** OpenAI-compatible endpoint in the control plane forwarding to Sarvam; the VM gets a short-lived scoped token only. *Done when:* a scan of the VM finds no Sarvam key and turns still work.
+- **5.2 Usage records.** Tokens in and out per user and model. *Done when:* totals match the provider's own numbers on a test run.
+- **5.3 Plans and weekly reset.** Warn at 80%, return 429 at 100%, meter shown in the UI. *Done when:* a test user hitting the cap is stopped and resets on schedule.
+- **5.4 VM-hours.** Meter running time and enforce a cap. *Done when:* a capped user's VM is stopped and the UI says why.
+- **5.5 Bring your own key.** Stored encrypted in the control plane, forwarded by the proxy, not metered for AI use. *Done when:* a turn runs on a user key with no key on the VM.
+
+## Phase 6: connections through Composio
+
+- **6.1 Broker.** The control plane serves tools per user (user ID fixed); the VM gets a short-lived token. *Done when:* a bot lists a user's connected tools and the VM holds no OAuth tokens.
+- **6.2 Connect flow.** The agent asks, the user gets a connect link, authorizes, and the turn continues. *Done when:* "summarise my email" works from a cold start.
+- **6.3 Approval policy.** Actions that change things (send, post, delete) always ask by default. *Done when:* a send blocks until approved.
+- **6.4 Audit log.** Every tool call, approval and result recorded per user. *Done when:* a run is fully reconstructable from the log.
+
+## Phase 7: browser and live view
+
+- **7.1 Browser tools.** Chromium on the VM exposed to the engine as tools. *Done when:* a bot completes a click-through task.
+- **7.2 Live view.** Stream the browser to the web UI using [CDP screencast](https://chromedevtools.github.io/devtools-protocol/). *Done when:* you can watch a task as it happens.
+- **7.3 Takeover.** You can take control to sign in or solve a captcha, then hand back. *Done when:* a login flow completes with the user typing credentials directly.
+- **7.4 Full desktop (decide later).** Only if the browser view isn't enough; compare Amazon DCV and noVNC-style options.
+- **7.5 Image input check.** Confirm which Sarvam models can read screenshots. *Done when:* the browser task passes on a chosen model.
+
+## Phase 8: notifications and onboarding
+
+- **8.1 Web push.** Turn finished, approval needed, run failed. *Done when:* a notification arrives with the tab closed.
+- **8.2 One-click onboarding.** Signup, VM provisioning, a default bot, a prompt to connect tools. *Done when:* a first-time user with no technical knowledge is chatting within minutes.
+- **8.3 Safety review before any outside user.** Outbound traffic logging and limits, abuse and cost controls, secrets scan, verification of the separate-account and instance-metadata settings. *Done when:* a written checklist passes.
+
+## Phase 9: later
+
+- **9.1 Slack.** **9.2 Discord.** Adapters mapped to threads.
+- **9.3 More engines and subscriptions.** Claude, Codex, Cursor and others through ACP. First check Anthropic's and OpenAI's current terms for running consumer-subscription tools on machines we host; until then, subscription logins are self-hosted only.
+- **9.4 Self-hosted and local mode.** Same daemon on a laptop or VPS, with the limits clearly stated (sleeps, no wake-up, weaker isolation).
+- **9.5 Voice** through Sarvam. **9.6 Mobile app.**
+
+## Verification, across the whole project
+
+- Per task: its "done when" check, run in CI where it can be.
+- **Unit tests** for pure logic (schedule maths, metering) using a fake clock.
+- **Contract tests** for the engine interface, run against the fake engine and real OpenCode.
+- **Integration tests** for the daemon with a real OpenCode process.
+- **End-to-end on a real EC2 instance** at the end of Phases 4, 5, 6 and 7: sign up, chat, create a schedule, stop the VM, confirm the wake and the result, confirm an approval blocks, confirm the usage counter moves and the limit fires.
+- **A standing model-fit set** of three real tasks (a daily tracking job, an email summary, a browser click-through), re-run whenever the default model changes.
+- **Safety checks** (Tasks 4.2 and 8.3) are repeatable scripts, not one-off reviews.
