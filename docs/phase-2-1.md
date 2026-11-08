@@ -15,3 +15,40 @@ COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/src/api.live.test.ts
 ```
 
 `opencode` must be on `PATH`, or set `OPENCODE_BIN`.
+
+## How a message reaches OpenCode
+
+A person talks to the API. The API talks to an engine. The engine talks to OpenCode. OpenCode talks to Sarvam.
+
+```mermaid
+flowchart LR
+  Person -->|HTTP| API
+  API -->|prompt and close| Engine
+  Engine -->|ACP| OpenCode
+  OpenCode --> Sarvam
+```
+
+`api.ts` is the door. `startDaemon` opens the database, starts the engine, and listens on localhost. `handle` reads the path. `createBot` makes the folder, writes `opencode.json`, and stores the one conversation. `sendMessage` takes the text, calls `engine.prompt`, and writes each update to the client as it arrives. `view` and `transcript` are what the GET routes return. The smaller functions read the body, choose a status code, and write JSON or an event.
+
+The API knows two calls on an engine: `prompt` and `close`. That pair is the `Engine` type. A test can pass its own `prompt`, and the routes still run.
+
+`engine.ts` is how OpenCode fulfills those two calls. `opencodeModelConfig` writes the Sarvam provider file. `startOpencodeEngine` starts `opencode acp`, sends `initialize`, and keeps that process for the life of the daemon. `prompt` asks `openSession` for the conversation, then sends `session/prompt`. Each `session/update` comes back through `onUpdate`. `openSession` reuses a session this process already has, loads one a restart stored, or starts a new one in the bot's folder. `selectModel` points that session at `sarvam/glm5.3` when OpenCode started on another model. `close` stops the process.
+
+```mermaid
+sequenceDiagram
+  participant Person
+  participant API
+  participant Engine
+  participant OpenCode
+  Person->>API: POST /bots/id/messages
+  API->>Engine: prompt
+  Engine->>OpenCode: session/prompt
+  OpenCode--)Engine: session/update
+  Engine--)API: onUpdate
+  API--)Person: event update
+  OpenCode-->>Engine: stop end_turn
+  Engine-->>API: stop reason
+  API--)Person: event done
+```
+
+Claude and Codex speak ACP too, so they would use the same `prompt` and `close`. Each one still needs its own starter: its program, its config, and how it chooses a model. That is what `engine.ts` does for OpenCode. The routes in `api.ts` stay as they are. A bot record can already name another engine. A message to that bot is refused until that starter exists.
