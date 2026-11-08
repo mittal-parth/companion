@@ -11,12 +11,35 @@ export const engineNames = ["opencode", "claude", "codex"] as const;
 
 export type EngineName = (typeof engineNames)[number];
 
-/** A named agent. New threads copy its engine, then keep their own. */
+/** A named agent. Its conversation keeps the engine it started with. */
 export type Bot = {
   id: string;
   name: string;
   engine: EngineName;
 };
+
+/**
+ * A bot as the local API shows it.
+ * The directory is the one folder that conversation works in.
+ */
+export type BotView = Bot & {
+  directory: string;
+};
+
+/** A bot together with the session updates stored for its conversation. */
+export type BotTranscript = BotView & {
+  updates: acp.SessionUpdate[];
+};
+
+/**
+ * One server-sent event from a turn.
+ * `update` is an ACP session update, in arrival order.
+ * `done` is why the prompt stopped. `error` means the turn failed.
+ */
+export type TurnEvent =
+  | { event: "update"; data: acp.SessionUpdate }
+  | { event: "done"; data: { stopReason: acp.StopReason } }
+  | { event: "error"; data: { error: string } };
 
 /**
  * One conversation. `updates` is the transcript, in the order the engine sent it.

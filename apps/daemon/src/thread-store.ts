@@ -73,6 +73,22 @@ export type ThreadStore = {
 };
 
 /**
+ * The one conversation stored for a bot.
+ * The local API creates that row with the bot and never adds a second.
+ */
+export function botConversation(
+  store: ThreadStore,
+  botId: string,
+): ThreadSummary {
+  const threads = store.listThreads(botId);
+  const thread = threads[0];
+  if (threads.length !== 1 || thread === undefined) {
+    throw new Error("A bot has one conversation.");
+  }
+  return thread;
+}
+
+/**
  * Where this machine keeps the daemon's thread database.
  * `XDG_DATA_HOME` moves it. Otherwise it is `~/.local/share/companion/threads.db`.
  */
