@@ -12,28 +12,61 @@ import type { ThreadStore } from "./thread-store.js";
 import { botConversation } from "./thread-store.js";
 import { approvalResponse } from "./approval.js";
 
-/**
- * OpenCode's free model. It needs no API key.
- * On the last live run OpenCode refused it with "Free usage limit reached".
- * A keyed provider has to replace this before that run can pass. See docs/phase-2-1.md.
- */
-export const freeOpencodeModel = "opencode/big-pickle";
+/** Sarvam's GLM 5.3, the model a bot's conversation runs on. */
+export const defaultOpencodeModel = "sarvam/glm5.3";
+
+/** Named in the config. The key itself stays in the environment. */
+const sarvamKeyEnv = "SARVAM_API_KEY";
 
 const turnTimeoutMs = 180_000;
 
 /**
- * The project file OpenCode reads for which model a conversation uses.
+ * Tells OpenCode to call Sarvam before a session starts.
  * The same file is written into the bot's folder and into the process config.
+ * The key is named twice, as the provider credential and as Sarvam's header,
+ * and is not copied into the file.
  */
 export function opencodeModelConfig(model: string): string {
-  return `${JSON.stringify(
+  const config = `${JSON.stringify(
     {
       $schema: "https://opencode.ai/config.json",
       model,
+      providers: {
+        sarvam: {
+          name: "Sarvam",
+          env: [sarvamKeyEnv],
+          package: "@opencode/ai/providers/openai-compatible",
+          settings: {
+            baseURL: "https://api.sarvam.ai/v2",
+          },
+          headers: {
+            "api-subscription-key": `{env:${sarvamKeyEnv}}`,
+          },
+          models: {
+            "glm5.3": {
+              name: "GLM 5.3",
+              capabilities: {
+                tools: true,
+                input: ["text"],
+                output: ["text"],
+              },
+              limit: {
+                context: 1048576,
+                output: 8192,
+              },
+            },
+          },
+        },
+      },
     },
     null,
     2,
   )}\n`;
+  const key = process.env[sarvamKeyEnv];
+  if (key !== undefined && key.length >= 16 && config.includes(key)) {
+    throw new Error("Refusing to write the Sarvam key into OpenCode's config.");
+  }
+  return config;
 }
 
 /** Speaks ACP for the daemon. One prompt is one turn of a bot's conversation. */
@@ -57,6 +90,13 @@ export async function startOpencodeEngine(options: {
   dataHome: string;
   configHome: string;
 }): Promise<Engine> {
+  if (
+    options.model.startsWith("sarvam/") &&
+    (process.env[sarvamKeyEnv]?.trim() ?? "") === ""
+  ) {
+    throw new Error("SARVAM_API_KEY is required to run a Sarvam model.");
+  }
+  // Written before the process starts, so session/new already lists this model.
   mkdirSync(join(options.configHome, "opencode"), { recursive: true });
   writeFileSync(
     join(options.configHome, "opencode", "opencode.json"),
@@ -73,7 +113,7 @@ export async function startOpencodeEngine(options: {
 
   const child = spawn(
     options.bin,
-    ["acp", "--print-logs", "--log-level", "ERROR"],
+    ["acp", "--print-logs", "--log-level", "error"],
     {
       cwd: options.dataHome,
       env,
@@ -90,7 +130,7 @@ export async function startOpencodeEngine(options: {
   child.stderr?.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
     stderr = `${stderr}${text}`.slice(-8000);
-    // OpenCode keeps the prompt open after this refusal, so end the turn here.
+    // A free-tier refusal leaves the prompt open, so end the turn here.
     if (reportProviderError && /Free usage limit reached/i.test(stderr)) {
       reportProviderError(
         new Error(
@@ -249,7 +289,7 @@ async function openSession(
   return created.sessionId;
 }
 
-/** Points the session at the free model when OpenCode started on another one. */
+/** Points the session at the requested model when OpenCode started on another one. */
 async function selectModel(
   agent: acp.ClientContext,
   sessionId: string,

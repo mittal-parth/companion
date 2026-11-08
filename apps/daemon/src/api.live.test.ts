@@ -1,7 +1,6 @@
 /**
- * Drives one full turn through the local API with a real OpenCode process.
- * Skipped unless COMPANION_LIVE=1. The free model refused on the last run.
- * docs/phase-2-1.md says how to point this at a keyed provider.
+ * Drives one full turn through the local API with OpenCode on Sarvam GLM 5.3.
+ * Skipped unless COMPANION_LIVE=1, so CI does not call the provider.
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -87,7 +86,7 @@ test.skipIf(!live)(
       rmSync(directory, { recursive: true, force: true });
     }
   },
-  150_000,
+  200_000,
 );
 
 function parseEvents(body: string): TurnEvent[] {
