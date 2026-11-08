@@ -9,7 +9,11 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import type { RecordedSession } from "@companion/shared";
 import { expect, test } from "vitest";
-import { openThreadStore, threadStorePath } from "./thread-store.js";
+import {
+  botConversation,
+  openThreadStore,
+  threadStorePath,
+} from "./thread-store.js";
 
 const recorded = JSON.parse(
   readFileSync(
@@ -89,6 +93,23 @@ test("a thread keeps the engine it started with", () => {
       cwd: "/bots/ada",
     });
     expect(store.getThread(first.id).updates).toEqual([recorded.updates[0]]);
+    store.close();
+  });
+});
+
+test("a bot has one conversation", () => {
+  withDirectory((directory) => {
+    const store = openThreadStore(join(directory, "threads.db"));
+    const bot = store.createBot({ name: "Content", engine: "opencode" });
+    expect(() => botConversation(store, bot.id)).toThrow(
+      "A bot has one conversation.",
+    );
+    const thread = store.createThread({ botId: bot.id, cwd: "/bots/content" });
+    expect(botConversation(store, bot.id).id).toBe(thread.id);
+    store.createThread({ botId: bot.id, cwd: "/bots/content" });
+    expect(() => botConversation(store, bot.id)).toThrow(
+      "A bot has one conversation.",
+    );
     store.close();
   });
 });
