@@ -19,7 +19,7 @@ import {
   type TurnEvent,
 } from "@companion/shared";
 import {
-  freeOpencodeModel,
+  defaultOpencodeModel,
   opencodeModelConfig,
   startOpencodeEngine,
   type Engine,
@@ -46,7 +46,7 @@ export type DaemonOptions = {
   /** Replaces OpenCode. Tests pass one that scripts a turn. */
   engine?: Engine;
   opencodeBin?: string;
-  /** OpenCode model id. Defaults to the free model that needs no API key. */
+  /** OpenCode model id. Defaults to Sarvam GLM 5.3. */
   model?: string;
 };
 
@@ -56,7 +56,7 @@ export type DaemonOptions = {
  */
 export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   const store = openThreadStore(options.storePath);
-  const model = options.model ?? freeOpencodeModel;
+  const model = options.model ?? defaultOpencodeModel;
   const root = dirname(options.storePath);
   let engine: Engine;
   try {

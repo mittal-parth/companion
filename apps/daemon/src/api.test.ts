@@ -9,7 +9,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 import type { BotView, TurnEvent } from "@companion/shared";
 import { expect, test } from "vitest";
 import { startDaemon, type Daemon } from "./api.js";
-import { freeOpencodeModel } from "./engine.js";
+import { defaultOpencodeModel } from "./engine.js";
 import type { Engine } from "./engine.js";
 
 const hello: acp.SessionUpdate = {
@@ -24,9 +24,32 @@ test("creating a bot starts its one conversation", async () => {
     const bot = (await created.json()) as BotView;
     expect(bot.name).toBe("Content");
     expect(bot.engine).toBe("opencode");
-    expect(
+    const config = JSON.parse(
       readFileSync(join(bot.directory, "opencode.json"), "utf8"),
-    ).toContain(freeOpencodeModel);
+    ) as {
+      model: string;
+      providers: {
+        sarvam: {
+          package: string;
+          env: string[];
+          settings: { baseURL: string };
+          headers: { "api-subscription-key": string };
+          models: { "glm5.3": { capabilities: { tools: boolean } } };
+        };
+      };
+    };
+    expect(config.model).toBe(defaultOpencodeModel);
+    expect(config.providers.sarvam).toMatchObject({
+      package: "@opencode/ai/providers/openai-compatible",
+      env: ["SARVAM_API_KEY"],
+      settings: { baseURL: "https://api.sarvam.ai/v2" },
+      headers: { "api-subscription-key": "{env:SARVAM_API_KEY}" },
+      models: { "glm5.3": { capabilities: { tools: true } } },
+    });
+    const key = process.env.SARVAM_API_KEY;
+    if (key !== undefined && key.length >= 16) {
+      expect(JSON.stringify(config)).not.toContain(key);
+    }
 
     const listed = await fetch(`${daemon.url}/bots`);
     expect(listed.status).toBe(200);
