@@ -5,7 +5,7 @@ One user has many bots. Each bot has its own instructions, memory, and threads. 
 ## Agents
 
 **Bot**:
-A named agent belonging to one user, with its own instructions, memory, and threads.
+A named agent belonging to one user, with its own instructions, memory, and threads. New threads copy its engine.
 _Avoid_: agent, assistant, engine
 
 **Engine**:
@@ -31,7 +31,7 @@ _Avoid_: engine, bot
 ## Conversations
 
 **Thread**:
-The transcript of one conversation, owned by one bot. The web conversation and the Slack conversation with the same bot are two threads, and they share that bot's files and memory. A thread stays the same conversation when the engine's session is replaced.
+The transcript of one conversation, owned by one bot. The web conversation and the Slack conversation with the same bot are two threads, and they share that bot's files and memory. A thread stays the same conversation when the engine's session is replaced. It records the engine that owns its session, so a restart starts that engine and loads the session.
 _Avoid_: channel, chat, session
 
 **Channel**:
