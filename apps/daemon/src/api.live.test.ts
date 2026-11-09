@@ -123,9 +123,7 @@ test.skipIf(!live)(
         );
         expect(ada.directory).not.toBe(bea.directory);
         expectFile(join(ada.directory, "AGENTS.md"), wordA, wordB, adaReply);
-        expectFile(join(ada.directory, "MEMORY.md"), wordA, wordB, adaReply);
         expectFile(join(bea.directory, "AGENTS.md"), wordB, wordA, beaReply);
-        expectFile(join(bea.directory, "MEMORY.md"), wordB, wordA, beaReply);
         expect(adaReply).toContain(wordA);
         expect(adaReply).not.toContain(wordB);
         expect(beaReply).toContain(wordB);
@@ -136,6 +134,8 @@ test.skipIf(!live)(
             "utf8",
           ),
         ).toBe(standingInstructions());
+        expectFile(join(ada.directory, "MEMORY.md"), wordA, wordB, adaReply);
+        expectFile(join(bea.directory, "MEMORY.md"), wordB, wordA, beaReply);
         created = { ada, bea };
       } finally {
         await daemon.close();
@@ -159,6 +159,18 @@ test.skipIf(!live)(
         expect(replyText(beaTurn), JSON.stringify(beaTurn)).toContain(wordB);
         expect(replyText(beaTurn)).not.toContain(wordA);
         expect(hasToolCall(beaTurn), JSON.stringify(beaTurn)).toBe(true);
+        expectFile(
+          join(ada.directory, "MEMORY.md"),
+          wordA,
+          wordB,
+          replyText(adaTurn),
+        );
+        expectFile(
+          join(bea.directory, "MEMORY.md"),
+          wordB,
+          wordA,
+          replyText(beaTurn),
+        );
       } finally {
         await restarted.close();
       }

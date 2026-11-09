@@ -14,6 +14,7 @@ import { dirname, join, resolve } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   engineNames,
+  engines,
   type Bot,
   type BotTranscript,
   type BotView,
@@ -211,7 +212,15 @@ export function openingPrompt(name: string, description?: string): string {
   if (description === undefined) {
     return `${named}\n\nThe person who created you did not say what you are for. Greet them and ask what they want you to do. Do not invent a role.`;
   }
-  return `${named}\n\nThe person who created you described you this way:\n${description}\n\nWrite that into AGENTS.md in your working directory, keeping the meaning, and record your name there. Put any fact worth keeping into MEMORY.md. Then reply to them briefly as that bot.`;
+  return [
+    named,
+    "",
+    "The person who created you described you this way:",
+    description,
+    "",
+    "Write that into AGENTS.md in your working directory, keeping the meaning, and record your name there. Put any fact worth keeping into MEMORY.md.",
+    "Reply briefly as that bot. If one or two details would change how you do the work, ask those before you start. Otherwise begin.",
+  ].join("\n");
 }
 
 /**
@@ -234,7 +243,7 @@ async function createBot(
   );
   handler.store.createThread({ botId: bot.id, cwd: directory });
   switch (engine) {
-    case "opencode":
+    case engines.opencode:
       await runTurn(
         handler,
         bot.id,
@@ -242,8 +251,8 @@ async function createBot(
         () => {},
       );
       break;
-    case "claude":
-    case "codex":
+    case engines.claude:
+    case engines.codex:
       // Those engines are not started yet. The folder is ready for them.
       break;
     default: {
@@ -325,7 +334,7 @@ async function runTurn(
   onUpdate: (update: acp.SessionUpdate) => void,
 ): Promise<acp.StopReason> {
   const bot = handler.store.getBot(botId);
-  if (bot.engine !== "opencode") {
+  if (bot.engine !== engines.opencode) {
     throw new HttpError(400, "This daemon only runs OpenCode.");
   }
   if (handler.busy.has(botId)) {
@@ -453,7 +462,7 @@ function optionalDescription(value: unknown): string | undefined {
 }
 
 function engineName(value: unknown): EngineName {
-  if (value === undefined) return "opencode";
+  if (value === undefined) return engines.opencode;
   if (typeof value !== "string") {
     throw new HttpError(400, "A bot's engine must be a name.");
   }

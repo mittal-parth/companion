@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
+import { engines } from "@companion/shared";
 import type { ThreadStore } from "./thread-store.js";
 import { botConversation } from "./thread-store.js";
 import { approvalResponse } from "./approval.js";
@@ -293,7 +294,7 @@ async function openSession(
   botId: string,
 ): Promise<string> {
   const thread = botConversation(store, botId);
-  if (thread.engine !== "opencode") {
+  if (thread.engine !== engines.opencode) {
     throw new Error("This daemon only runs OpenCode.");
   }
   if (thread.sessionId !== null && openSessions.has(thread.sessionId)) {
