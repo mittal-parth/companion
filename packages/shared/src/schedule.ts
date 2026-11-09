@@ -255,10 +255,11 @@ function parseCron(expression: string, timezone: string): CronPattern {
 }
 
 /**
- * Reject a cron whose runs can fall under 5 minutes apart.
- * Croner already parsed the hours and minutes. A clock gap of 5 minutes or
- * more never fires sooner, so those expressions stop here. A closer pair is
- * kept only when no real day matches it, which croner's own next run reports.
+ * Our limit, not croner's. Croner accepts a run every minute. A schedule that
+ * can fire more often than every five minutes is rejected, matching the
+ * interval floor. The hours and minutes come from croner's parsed pattern. A
+ * pair closer than five minutes on the clock is still allowed when croner's
+ * own next run shows that pair never actually happens.
  */
 function closerThanMinimum(expression: string, timezone: string): boolean {
   const pattern = parseCron(expression, timezone);
@@ -414,9 +415,9 @@ function zoned(
 }
 
 /**
- * The UTC instant of a wall-clock minute in a timezone.
- * A daylight-saving gap has no such minute, so the result is the first real
- * minute at or after it.
+ * UTC milliseconds of one wall-clock minute.
+ * Croner decides the instant, including a daylight-saving gap: 2:30 in a
+ * spring-forward hour comes back as 3:00, the same instant a cron would fire.
  */
 function atWall(
   timezone: string,
@@ -425,38 +426,25 @@ function atWall(
   day: number,
   minuteOfDay: number,
 ): number | null {
-  const local = new CronDate(null, timezone);
-  local.year = year;
-  local.month = month - 1;
-  local.day = day;
-  local.hour = Math.floor(minuteOfDay / 60);
-  local.minute = minuteOfDay % 60;
-  local.second = 0;
-  local.ms = 0;
-  const at = local.getTime();
-  const back = new CronDate(new Date(at), timezone);
-  if (
-    back.year === year &&
-    back.month === month - 1 &&
-    back.day === day &&
-    back.hour * 60 + back.minute === minuteOfDay
-  ) {
-    return at;
+  const hour = Math.floor(minuteOfDay / 60);
+  const minute = minuteOfDay % 60;
+  const midnight = new CronDate(null, timezone);
+  midnight.year = year;
+  midnight.month = month - 1;
+  midnight.day = day;
+  midnight.hour = 0;
+  midnight.minute = 0;
+  midnight.second = 0;
+  midnight.ms = 0;
+  const next = cronOf(`${minute} ${hour} * * *`, timezone).nextRun(
+    new Date(midnight.getTime() - minuteMs),
+  );
+  if (next === null) return null;
+  const local = new CronDate(next, timezone);
+  if (local.year !== year || local.month !== month - 1 || local.day !== day) {
+    return null;
   }
-  const target = ((year * 100 + month) * 100 + day) * 10_000 + minuteOfDay;
-  for (
-    let cursor = at - 3 * 60 * minuteMs;
-    cursor <= at + 3 * 60 * minuteMs;
-    cursor += minuteMs
-  ) {
-    const seen = new CronDate(new Date(cursor), timezone);
-    const stamp =
-      ((seen.year * 100 + (seen.month + 1)) * 100 + seen.day) * 10_000 +
-      seen.hour * 60 +
-      seen.minute;
-    if (stamp >= target) return cursor;
-  }
-  return null;
+  return next.getTime();
 }
 
 function weekdaysOf(value: unknown): number[] | undefined | "invalid" {
