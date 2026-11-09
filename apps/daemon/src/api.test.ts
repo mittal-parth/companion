@@ -2,13 +2,13 @@
  * Proves the local API creates a bot as one conversation and streams a turn.
  * The real OpenCode turn lives in api.live.test.ts.
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { BotView, TurnEvent } from "@companion/shared";
 import { expect, test } from "vitest";
-import { startDaemon, type Daemon } from "./api.js";
+import { startDaemon, openingPrompt, type Daemon } from "./api.js";
 import { defaultOpencodeModel } from "./engine.js";
 import type { Engine } from "./engine.js";
 
@@ -18,46 +18,51 @@ const hello: acp.SessionUpdate = {
 };
 
 test("creating a bot starts its one conversation", async () => {
-  await withDaemon(scripted([]), async (daemon) => {
-    const created = await postJson(daemon, "/bots", { name: "  Content  " });
-    expect(created.status).toBe(201);
-    const bot = (await created.json()) as BotView;
-    expect(bot.name).toBe("Content");
-    expect(bot.engine).toBe("opencode");
-    const config = JSON.parse(
-      readFileSync(join(bot.directory, "opencode.json"), "utf8"),
-    ) as {
-      model: string;
-      providers: {
-        sarvam: {
-          package: string;
-          env: string[];
-          settings: { baseURL: string };
-          headers: { "api-subscription-key": string };
-          models: { "glm5.3": { capabilities: { tools: boolean } } };
+  await withDaemon(
+    scripted([{ updates: [hello], stopReason: "end_turn" }]),
+    async (daemon) => {
+      const created = await postJson(daemon, "/bots", { name: "  Content  " });
+      expect(created.status).toBe(201);
+      const bot = (await created.json()) as BotView;
+      expect(bot.name).toBe("Content");
+      expect(bot.engine).toBe("opencode");
+      expect(existsSync(join(bot.directory, "AGENTS.md"))).toBe(false);
+      expect(existsSync(join(bot.directory, "MEMORY.md"))).toBe(false);
+      const config = JSON.parse(
+        readFileSync(join(bot.directory, "opencode.json"), "utf8"),
+      ) as {
+        model: string;
+        providers: {
+          sarvam: {
+            package: string;
+            env: string[];
+            settings: { baseURL: string };
+            headers: { "api-subscription-key": string };
+            models: { "glm5.3": { capabilities: { tools: boolean } } };
+          };
         };
       };
-    };
-    expect(config.model).toBe(defaultOpencodeModel);
-    expect(config.providers.sarvam).toMatchObject({
-      package: "@opencode/ai/providers/openai-compatible",
-      env: ["SARVAM_API_KEY"],
-      settings: { baseURL: "https://api.sarvam.ai/v2" },
-      headers: { "api-subscription-key": "{env:SARVAM_API_KEY}" },
-      models: { "glm5.3": { capabilities: { tools: true } } },
-    });
-    const key = process.env.SARVAM_API_KEY;
-    if (key !== undefined && key.length >= 16) {
-      expect(JSON.stringify(config)).not.toContain(key);
-    }
+      expect(config.model).toBe(defaultOpencodeModel);
+      expect(config.providers.sarvam).toMatchObject({
+        package: "@opencode/ai/providers/openai-compatible",
+        env: ["SARVAM_API_KEY"],
+        settings: { baseURL: "https://api.sarvam.ai/v2" },
+        headers: { "api-subscription-key": "{env:SARVAM_API_KEY}" },
+        models: { "glm5.3": { capabilities: { tools: true } } },
+      });
+      const key = process.env.SARVAM_API_KEY;
+      if (key !== undefined && key.length >= 16) {
+        expect(JSON.stringify(config)).not.toContain(key);
+      }
 
-    const listed = await fetch(`${daemon.url}/bots`);
-    expect(listed.status).toBe(200);
-    expect(await listed.json()).toEqual([bot]);
+      const listed = await fetch(`${daemon.url}/bots`);
+      expect(listed.status).toBe(200);
+      expect(await listed.json()).toEqual([bot]);
 
-    const read = await fetch(`${daemon.url}/bots/${bot.id}`);
-    expect(await read.json()).toEqual({ ...bot, updates: [] });
-  });
+      const read = await fetch(`${daemon.url}/bots/${bot.id}`);
+      expect(await read.json()).toEqual({ ...bot, updates: [hello] });
+    },
+  );
 });
 
 test("a message streams session updates and stores them", async () => {
@@ -67,6 +72,7 @@ test("a message streams session updates and stores them", async () => {
   };
   await withDaemon(
     scripted([
+      { updates: [], stopReason: "end_turn" },
       { updates: [hello], stopReason: "end_turn" },
       { updates: [second], stopReason: "end_turn" },
     ]),
@@ -99,7 +105,11 @@ test("a second message is refused while a turn is running", async () => {
     started = resolve;
   });
   const engine: Engine = {
-    async prompt(_botId, _text, onUpdate) {
+    async prompt(_botId, text, onUpdate) {
+      if (text.startsWith("Your name is")) {
+        onUpdate(hello);
+        return "end_turn";
+      }
       started();
       await hold;
       onUpdate(hello);
@@ -139,6 +149,11 @@ test("bad requests name what was wrong", async () => {
       engine: "nope",
     });
     expect(unknownEngine.status).toBe(400);
+    const badDescription = await postJson(daemon, "/bots", {
+      name: "Content",
+      description: 4,
+    });
+    expect(badDescription.status).toBe(400);
     const claude = await postJson(daemon, "/bots", {
       name: "Content",
       engine: "claude",
@@ -172,7 +187,8 @@ test("an engine failure is reported on the response", async () => {
   const engine: Engine = {
     async prompt(_botId, _text, onUpdate) {
       calls += 1;
-      if (calls === 1) throw new Error("OpenCode exploded.");
+      if (calls === 1) return "end_turn";
+      if (calls === 2) throw new Error("OpenCode exploded.");
       onUpdate(hello);
       throw new Error("OpenCode stopped.");
     },
@@ -193,6 +209,114 @@ test("an engine failure is reported on the response", async () => {
     ]);
     const stored = await fetch(`${daemon.url}/bots/${bot.id}`);
     expect(await stored.json()).toMatchObject({ updates: [hello] });
+  });
+});
+
+test("a failed opening turn is an error and the bot remains", async () => {
+  const engine: Engine = {
+    async prompt() {
+      throw new Error("OpenCode exploded.");
+    },
+    async close() {},
+  };
+  await withDaemon(engine, async (daemon) => {
+    const created = await postJson(daemon, "/bots", { name: "Content" });
+    expect(created.status).toBe(500);
+    expect(await created.json()).toEqual({ error: "OpenCode exploded." });
+    const listed = (await (
+      await fetch(`${daemon.url}/bots`)
+    ).json()) as BotView[];
+    expect(listed).toHaveLength(1);
+    const bot = listed[0];
+    expect(bot).toBeDefined();
+    const read = await fetch(`${daemon.url}/bots/${bot?.id}`);
+    expect(await read.json()).toMatchObject({ updates: [] });
+  });
+});
+
+test("two bots keep separate folders and opening turns", async () => {
+  const prompts: string[] = [];
+  const engine: Engine = {
+    async prompt(_botId, text, onUpdate) {
+      prompts.push(text);
+      onUpdate(hello);
+      return "end_turn";
+    },
+    async close() {},
+  };
+  await withDaemon(engine, async (daemon) => {
+    const ada = await createBot(daemon, "Ada", "Keep the word marigold.");
+    const bea = await createBot(daemon, "Bea");
+    const blank = await createBot(daemon, "Cleo", "   ");
+    expect(ada.directory).not.toBe(bea.directory);
+    expect(existsSync(join(ada.directory, "AGENTS.md"))).toBe(false);
+    expect(existsSync(join(ada.directory, "MEMORY.md"))).toBe(false);
+    expect(existsSync(join(bea.directory, "AGENTS.md"))).toBe(false);
+    expect(prompts).toEqual([
+      openingPrompt("Ada", "Keep the word marigold."),
+      openingPrompt("Bea"),
+      openingPrompt("Cleo"),
+    ]);
+    const stored = await fetch(`${daemon.url}/bots/${ada.id}`);
+    expect(await stored.json()).toMatchObject({ updates: [hello] });
+    expect(blank.name).toBe("Cleo");
+  });
+});
+
+test("two bots can take a turn at the same time", async () => {
+  let release: () => void = () => {};
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let waiting = 0;
+  let bothWaiting: () => void = () => {};
+  const ready = new Promise<void>((resolve) => {
+    bothWaiting = resolve;
+  });
+  const engine: Engine = {
+    async prompt(botId, text, onUpdate) {
+      if (text.startsWith("Your name is")) return "end_turn";
+      waiting += 1;
+      if (waiting === 2) bothWaiting();
+      await hold;
+      onUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: botId },
+      });
+      return "end_turn";
+    },
+    async close() {},
+  };
+  let first: Promise<TurnEvent[]> | undefined;
+  let second: Promise<TurnEvent[]> | undefined;
+  await withDaemon(engine, async (daemon) => {
+    try {
+      const ada = await createBot(daemon, "Ada");
+      const bea = await createBot(daemon, "Bea");
+      first = readTurn(daemon, ada.id, "work on ada");
+      second = readTurn(daemon, bea.id, "work on bea");
+      await ready;
+      release();
+      const [adaTurn, beaTurn] = await Promise.all([first, second]);
+      expect(adaTurn).toEqual([
+        {
+          event: "update",
+          data: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: ada.id },
+          },
+        },
+        { event: "done", data: { stopReason: "end_turn" } },
+      ]);
+      expect(beaTurn[0]).toMatchObject({
+        event: "update",
+        data: { content: { text: bea.id } },
+      });
+    } finally {
+      release();
+      await first?.catch(() => undefined);
+      await second?.catch(() => undefined);
+    }
   });
 });
 
@@ -229,8 +353,12 @@ async function withDaemon(
   }
 }
 
-async function createBot(daemon: Daemon, name: string): Promise<BotView> {
-  const response = await postJson(daemon, "/bots", { name });
+async function createBot(
+  daemon: Daemon,
+  name: string,
+  description?: string,
+): Promise<BotView> {
+  const response = await postJson(daemon, "/bots", { name, description });
   expect(response.status).toBe(201);
   return (await response.json()) as BotView;
 }
