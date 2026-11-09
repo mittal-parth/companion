@@ -306,48 +306,14 @@ test("validation rejects a schedule that cannot be run", () => {
       "A cron expression is invalid.",
     ],
     [
-      { ...text, kind: "cron", expression: "* * * * *", timezone: "UTC" },
-      "A schedule must be at least 5 minutes apart.",
-    ],
-    [
-      { ...text, kind: "cron", expression: "*/4 * * * *", timezone: "UTC" },
-      "A schedule must be at least 5 minutes apart.",
-    ],
-    [
-      { ...text, kind: "cron", expression: "0,4 * * * *", timezone: "UTC" },
-      "A schedule must be at least 5 minutes apart.",
-    ],
-    [
-      { ...text, kind: "cron", expression: "59,0 23,0 * * *", timezone: "UTC" },
-      "A schedule must be at least 5 minutes apart.",
-    ],
-    [
-      {
-        ...text,
-        kind: "cron",
-        expression: "59,0 23,0 * * 1,2",
-        timezone: "UTC",
-      },
-      "A schedule must be at least 5 minutes apart.",
-    ],
-    [
-      {
-        ...text,
-        kind: "cron",
-        expression: "59,0 23,0 1,2 * *",
-        timezone: "UTC",
-      },
-      "A schedule must be at least 5 minutes apart.",
-    ],
-    [
       {
         ...text,
         kind: "interval",
-        everyMinutes: 4,
+        everyMinutes: 0,
         anchorAt: 0,
         timezone: "UTC",
       },
-      "Interval minutes must be a whole number from 5 to 1440.",
+      "Interval minutes must be a whole number from 1 to 1440.",
     ],
     [
       {
@@ -357,7 +323,7 @@ test("validation rejects a schedule that cannot be run", () => {
         anchorAt: 0,
         timezone: "UTC",
       },
-      "Interval minutes must be a whole number from 5 to 1440.",
+      "Interval minutes must be a whole number from 1 to 1440.",
     ],
     [
       {
@@ -367,7 +333,7 @@ test("validation rejects a schedule that cannot be run", () => {
         anchorAt: 0,
         timezone: "UTC",
       },
-      "Interval minutes must be a whole number from 5 to 1440.",
+      "Interval minutes must be a whole number from 1 to 1440.",
     ],
     [
       {
@@ -457,42 +423,39 @@ test("validation rejects a schedule that cannot be run", () => {
   }
 });
 
-test("five minutes apart is allowed, including a midnight gap that the days never join", () => {
-  expect(
-    validateSchedule({
-      ...text,
-      kind: "cron",
-      expression: "  */5 9-16 * * MON-FRI  ",
-      timezone: "UTC",
-    }),
-  ).toMatchObject({
-    ok: true,
-    schedule: { expression: "*/5 9-16 * * MON-FRI" },
+test("a cron runs as often as croner allows, down to one minute", () => {
+  const everyMinute = accepted({
+    ...text,
+    kind: "cron",
+    expression: "* * * * *",
+    timezone: "UTC",
   });
-  expect(
-    validateSchedule({
-      ...text,
-      kind: "cron",
-      expression: "58,2 23,0 * * 1,3",
-      timezone: "UTC",
-    }).ok,
-  ).toBe(true);
-  expect(
-    validateSchedule({
-      ...text,
-      kind: "cron",
-      expression: "59,0 23,0 1,15 * *",
-      timezone: "UTC",
-    }).ok,
-  ).toBe(true);
-  expect(
-    validateSchedule({
-      ...text,
-      kind: "cron",
-      expression: "0,4 9 31 2 *",
-      timezone: "UTC",
-    }).ok,
-  ).toBe(true);
+  expect(nextRun(everyMinute, at("2026-11-09T09:00:00.000Z"))).toBe(
+    at("2026-11-09T09:01:00.000Z"),
+  );
+  const everyFour = accepted({
+    ...text,
+    kind: "cron",
+    expression: "  */4 * * * *  ",
+    timezone: "UTC",
+  });
+  if (everyFour.kind === "cron") {
+    expect(everyFour.expression).toBe("*/4 * * * *");
+  }
+  expect(nextRun(everyFour, at("2026-11-09T09:00:00.000Z"))).toBe(
+    at("2026-11-09T09:04:00.000Z"),
+  );
+
+  const everyOne = accepted({
+    ...text,
+    kind: "interval",
+    everyMinutes: 1,
+    anchorAt: at("2026-11-09T09:00:00.000Z"),
+    timezone: "UTC",
+  });
+  expect(nextRun(everyOne, at("2026-11-09T09:00:00.000Z"))).toBe(
+    at("2026-11-09T09:01:00.000Z"),
+  );
 });
 
 test("nextRuns returns nothing when asked for no occurrences", () => {

@@ -12,7 +12,7 @@ The caller passes the timezone or the instant. This code does not read the compu
 
 Daylight saving follows croner. A fixed 2:30 in the spring-forward gap runs at 3:00, the first valid minute. A fixed 1:30 in the fall-back hour runs once, on the first pass. A list or a step keeps both passes of a repeated hour and skips a minute that does not exist. An interval ignores the names of those hours and keeps stepping by its real minutes.
 
-Nothing is accepted closer than every 5 minutes. An interval's `everyMinutes` is a whole number from 5 to 1,440. A cron expression whose clock times can fall closer than that is rejected. A gap that only exists on paper, such as 31 February at 9:00 and 9:04, is allowed because it never runs.
+A cron expression uses croner's five fields, so the closest it can run is every minute. An interval's `everyMinutes` is a whole number from 1 to 1,440.
 
 `nextRun` returns the earliest UTC instant strictly after `now`. That instant is the occurrence. Passing it back as `now` returns the one after it, which is how a later fire can run a slot once. `nextRuns` returns the next few, for a preview.
 

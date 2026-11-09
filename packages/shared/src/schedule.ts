@@ -5,19 +5,18 @@
  * computer from the same instants. Both call these functions. Nothing here
  * stores a schedule or starts a turn.
  *
- * Croner computes the calendar dates, including daylight saving. This file
- * decides which kind of schedule it is, refuses anything closer than five
- * minutes, and steps an interval in real minutes rather than clock hours.
+ * Croner computes the calendar dates, including daylight saving, and its
+ * finest schedule is one minute. This file decides which kind of schedule it
+ * is, and steps an interval in real minutes rather than clock hours.
  * The instant `nextRun` returns is the occurrence: pass it back as `now` and
  * the following occurrence comes back.
  */
-import { Cron, CronDate, CronPattern } from "croner";
+import { Cron, CronDate } from "croner";
 
-const minimumGapMinutes = 5;
+const minimumIntervalMinutes = 1;
 const maxIntervalMinutes = 24 * 60;
 const minuteMs = 60_000;
-const minutesPerDay = 24 * 60;
-/** Long enough to see a weekday line up with any 5-minute grid. */
+/** Stops a weekday and window search that never lands. */
 const intervalSearchSteps = 11_000;
 
 const ianaZone = /^(?:UTC|[A-Za-z][\w+-]*(?:\/[\w+-]+){1,2})$/;
@@ -160,12 +159,9 @@ function validateCron(
   }
   const timezone = input.timezone;
   try {
-    parseCron(expression, timezone);
+    cronOf(expression, timezone);
   } catch {
     return invalid("A cron expression is invalid.");
-  }
-  if (closerThanMinimum(expression, timezone)) {
-    return invalid("A schedule must be at least 5 minutes apart.");
   }
   const schedule: CronSchedule = {
     ...text,
@@ -184,10 +180,10 @@ function validateInterval(
   if (
     typeof everyMinutes !== "number" ||
     !Number.isInteger(everyMinutes) ||
-    everyMinutes < minimumGapMinutes ||
+    everyMinutes < minimumIntervalMinutes ||
     everyMinutes > maxIntervalMinutes
   ) {
-    return invalid("Interval minutes must be a whole number from 5 to 1440.");
+    return invalid("Interval minutes must be a whole number from 1 to 1440.");
   }
   if (!isEpoch(input.anchorAt))
     return invalid("An interval needs a start time.");
@@ -248,59 +244,6 @@ function nextCron(schedule: CronSchedule, now: number): number | null {
  */
 function cronOf(expression: string, timezone: string): Cron {
   return new Cron(expression, { timezone, paused: true, mode: "5-part" });
-}
-
-function parseCron(expression: string, timezone: string): CronPattern {
-  return new CronPattern(expression, timezone, { mode: "5-part" });
-}
-
-/**
- * Our limit, not croner's. Croner accepts a run every minute. A schedule that
- * can fire more often than every five minutes is rejected, matching the
- * interval floor. The hours and minutes come from croner's parsed pattern. A
- * pair closer than five minutes on the clock is still allowed when croner's
- * own next run shows that pair never actually happens.
- */
-function closerThanMinimum(expression: string, timezone: string): boolean {
-  const pattern = parseCron(expression, timezone);
-  const clock: number[] = [];
-  for (let hour = 0; hour < pattern.hour.length; hour += 1) {
-    if (!pattern.hour[hour]) continue;
-    for (let minute = 0; minute < pattern.minute.length; minute += 1) {
-      if (pattern.minute[minute]) clock.push(hour * 60 + minute);
-    }
-  }
-  clock.sort((left, right) => left - right);
-  const first = clock[0];
-  const last = clock[clock.length - 1];
-  if (first === undefined || last === undefined) return false;
-  let gap = minutesPerDay;
-  for (let index = 1; index < clock.length; index += 1) {
-    const earlier = clock[index - 1];
-    const later = clock[index];
-    if (earlier === undefined || later === undefined) continue;
-    gap = Math.min(gap, later - earlier);
-  }
-  if (clock.length > 1) gap = Math.min(gap, minutesPerDay - last + first);
-  if (gap >= minimumGapMinutes) return false;
-
-  const cron = cronOf(expression, timezone);
-  let previous: number | null = null;
-  let cursor = new Date(Date.UTC(2024, 0, 1));
-  const end = Date.UTC(2028, 0, 1);
-  for (let step = 0; step < 8_000 && cursor.getTime() < end; step += 1) {
-    const next = cron.nextRun(cursor);
-    if (next === null || next.getTime() >= end) return false;
-    if (
-      previous !== null &&
-      next.getTime() - previous < minimumGapMinutes * minuteMs
-    ) {
-      return true;
-    }
-    previous = next.getTime();
-    cursor = next;
-  }
-  return false;
 }
 
 function nextInterval(schedule: IntervalSchedule, now: number): number | null {
