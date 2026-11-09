@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.4.0",
-    "@companion/shared": "workspace:*"
+    "@companion/shared": "workspace:*",
+    "croner": "^11.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.19.2"

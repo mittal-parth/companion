@@ -2,7 +2,8 @@
  * Local API for one user's bots.
  * A bot is one long-lived conversation: create it, and OpenCode takes the
  * first turn. Later messages stream as server-sent events. The model keeps
- * that bot's instructions and memory in its folder.
+ * that bot's instructions and memory in its folder. A schedule sends its
+ * prompt into that same conversation.
  */
 import {
   createServer,
@@ -19,6 +20,7 @@ import {
   type BotTranscript,
   type BotView,
   type EngineName,
+  type Schedule,
   type TurnEvent,
 } from "@companion/shared";
 import {
@@ -27,6 +29,7 @@ import {
   startOpencodeEngine,
   type Engine,
 } from "./engine.js";
+import { startScheduler } from "./scheduler.js";
 import {
   botConversation,
   openThreadStore,
@@ -37,6 +40,14 @@ import {
 export type Daemon = {
   url: string;
   port: number;
+  /** Stores a schedule and arms its next slot. An omitted id is filled in. */
+  createSchedule(input: unknown): Schedule;
+  /** Schedules in the order they were stored. Omitting the bot lists them all. */
+  listSchedules(botId?: string): Schedule[];
+  /** Stops a schedule and removes it. */
+  deleteSchedule(id: string): void;
+  /** Occurrences whose turns came back, oldest first. */
+  receipts(scheduleId: string): number[];
   close(): Promise<void>;
 };
 
@@ -78,14 +89,45 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   }
 
   const busy = new Set<string>();
+  const idleWaiters = new Map<string, Array<() => void>>();
+  let stopping = false;
+
+  function whenIdle(botId: string): Promise<void> {
+    if (stopping || !busy.has(botId)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const waiting = idleWaiters.get(botId) ?? [];
+      waiting.push(resolve);
+      idleWaiters.set(botId, waiting);
+    });
+  }
+
+  function release(botId: string): void {
+    busy.delete(botId);
+    const waiting = idleWaiters.get(botId) ?? [];
+    idleWaiters.delete(botId);
+    for (const resolve of waiting) resolve();
+  }
+
+  function stopTurns(): void {
+    stopping = true;
+    for (const waiting of idleWaiters.values()) {
+      for (const resolve of waiting) resolve();
+    }
+    idleWaiters.clear();
+  }
+
+  const handler: Handler = {
+    store,
+    storePath: options.storePath,
+    engine,
+    model,
+    busy,
+    whenIdle,
+    release,
+    stopping: () => stopping,
+  };
   const server = createServer((req, res) => {
-    void handle(req, res, {
-      store,
-      storePath: options.storePath,
-      engine,
-      model,
-      busy,
-    }).catch((error: unknown) => {
+    void handle(req, res, handler).catch((error: unknown) => {
       if (res.headersSent || res.writableEnded) {
         res.destroy();
         return;
@@ -114,10 +156,24 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     throw new Error("The daemon did not bind a local port.");
   }
 
+  const scheduler = startScheduler({
+    store,
+    send: (botId, text) => runTurnWhenFree(handler, botId, text),
+  });
+
+  let closed = false;
   return {
     url: `http://127.0.0.1:${address.port}`,
     port: address.port,
+    createSchedule: (input) => scheduler.create(input),
+    listSchedules: (botId) => scheduler.list(botId),
+    deleteSchedule: (id) => scheduler.delete(id),
+    receipts: (scheduleId) => scheduler.receipts(scheduleId),
     async close() {
+      if (closed) return;
+      closed = true;
+      stopTurns();
+      scheduler.stop();
       server.closeAllConnections();
       await new Promise<void>((resolveClose, rejectClose) => {
         server.close((error) => {
@@ -146,6 +202,9 @@ type Handler = {
   engine: Engine;
   model: string;
   busy: Set<string>;
+  whenIdle(botId: string): Promise<void>;
+  release(botId: string): void;
+  stopping(): boolean;
 };
 
 async function handle(
@@ -348,7 +407,32 @@ async function runTurn(
       onUpdate(update);
     });
   } finally {
-    handler.busy.delete(botId);
+    handler.release(botId);
+  }
+}
+
+/**
+ * Sends a prompt once this bot's current turn has finished.
+ * A person's second message is still refused. A schedule waits instead.
+ */
+async function runTurnWhenFree(
+  handler: Handler,
+  botId: string,
+  text: string,
+): Promise<acp.StopReason> {
+  for (;;) {
+    if (handler.stopping()) throw new Error("The daemon is stopping.");
+    try {
+      return await runTurn(handler, botId, text, () => {
+        // The update is already stored. A schedule has no open response.
+      });
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 409) {
+        await handler.whenIdle(botId);
+        continue;
+      }
+      throw error;
+    }
   }
 }
 

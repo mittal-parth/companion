@@ -32,6 +32,9 @@ importers:
       '@companion/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      croner:
+        specifier: ^11.0.0
+        version: 11.0.0
     devDependencies:
       '@types/node':
         specifier: ^24.19.2
