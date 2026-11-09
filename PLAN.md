@@ -52,7 +52,9 @@ Relay: always-on websocket service (small container on ECS Fargate behind a load
         │
 User's EC2 VM (hardened image):
    daemon (ACP client): bot + thread store (SQLite), scheduler, approval broker,
-                        browser (Chromium + CDP), live-view stream
+                        CLI tools for the agent (schedule, web search)
+   desktop: virtual display + window manager, headed Chrome, browser and desktop
+            CLIs the agent calls from its shell; live-view stream added later
    /bots/<id>/  (files, memory)   +   /shared
    engine: OpenCode over ACP → our LLM proxy (Sarvam / user key)
 ```
@@ -68,22 +70,22 @@ User's EC2 VM (hardened image):
 
 **VM safety baseline.** No instance role, IMDSv2 required ([docs](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-options.html)), no inbound ports, user VMs in a separate AWS account from the control plane.
 
-**Schedules.** Jobs live in the daemon's SQLite with [croner](https://github.com/Hexagon/croner) for timing. Each firing sends the prompt into the bot's thread. A raw crontab entry is not used because we need catch-up, run receipts and thread routing. Design references: Hermes's [cron internals](https://github.com/NousResearch/hermes-agent/blob/HEAD/cron/AGENTS.md) (catch-up windows, at-most-once dispatch) and OpenMausBot's [routine docs](https://github.com/milind-soni/OpenMausBot/blob/HEAD/docs/routine-schedules.md). A stopped VM can't fire jobs, so the control plane creates a one-time [EventBridge Scheduler](https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-targets-universal.html) entry that starts the instance a minute early.
+**Schedules.** Jobs live in the daemon's SQLite with [croner](https://github.com/Hexagon/croner) for timing. Each firing sends the prompt into the bot's thread. Schedules are never edited by hand in the UI. The user views them and turns them on or off there; creating and changing them happens in chat, where the bot runs a `schedule` CLI (Task 2.6) to update its own jobs. A raw crontab entry is not used because we need catch-up, run receipts and thread routing. Design references: Hermes's [cron internals](https://github.com/NousResearch/hermes-agent/blob/HEAD/cron/AGENTS.md) (catch-up windows, at-most-once dispatch) and OpenMausBot's [routine docs](https://github.com/milind-soni/OpenMausBot/blob/HEAD/docs/routine-schedules.md). A stopped VM can't fire jobs, so the control plane creates a one-time [EventBridge Scheduler](https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-targets-universal.html) entry that starts the instance a minute early.
 
 ## Requirements map
 
 | #        | Requirement                                            | Where it lands                      |
 | -------- | ------------------------------------------------------ | ----------------------------------- |
 | 1        | Multiple bots, one computer                            | Phase 2                             |
-| 2        | See what the agent computer is doing                   | Tasks 3.4, 7.2                      |
+| 2        | See what the agent computer is doing                   | Tasks 3.3, 7.1                      |
 | 3        | Long-running tasks                                     | Task 2.7                            |
 | 4        | Connect tools by asking                                | Phase 6                             |
-| 5        | User-defined schedules                                 | Tasks 2.3 to 2.6, 4.6               |
+| 5        | User-defined schedules (edited via chat only)          | Tasks 2.3 to 2.6, 3.2, 4.6          |
 | 6, 9, 15 | Bring your own engine/key/subscription; Sarvam default | Tasks 1.3, 5.1, 5.5, 9.3            |
 | 7, 8, 17 | Cloud first on AWS; local optional                     | Phase 4; Task 9.4                   |
 | 10       | Many channels, same bot                                | thread model in 0.3; Tasks 9.1, 9.2 |
 | 11       | Key security                                           | Tasks 4.2, 5.1, 6.1                 |
-| 12       | Browser control                                        | Phase 7                             |
+| 12       | Web search, browser and desktop control                | Tasks 2.8 to 2.10; Phase 7          |
 | 13       | Notifications                                          | Task 8.1                            |
 | 14       | Voice via Sarvam                                       | Task 9.5                            |
 | 16       | Usage limits, weekly resets                            | Phase 5                             |
@@ -109,28 +111,36 @@ User's EC2 VM (hardened image):
 - **1.5 Cancel and resume.** `session/cancel` stops a turn. `session/load` continues that session after the engine process is replaced. _Done when:_ a test shows cancel stops a waiting turn, and a new connection loads the same session and prompts again. OpenCode did both: cancel stops with `cancelled`, and load then accepts another prompt.
 - **1.6 Thread store.** The daemon's SQLite lists each thread, keeps the session updates that form its transcript, and records the engine, session id, and working directory a restart uses to `session/load`. A bot's engine is the default for new threads. A thread keeps the engine it started with. OpenCode's own database stays the engine's session memory. _Done when:_ restarting the daemon restores a thread exactly.
 
-## Phase 2: the daemon, bots and schedules (still local)
+## Phase 2: the daemon, bots, schedules and computer use (still local)
 
 - **2.1 Daemon API.** Local API to create a bot and thread, send a message and stream events. _Done when:_ an integration test drives a full turn through it.
 - **2.2 Multiple bots.** A folder per bot, per-bot instructions and memory file, several bots at once. _Done when:_ two bots keep separate files and context (tested).
 - **2.3 Schedule maths.** Job model, cron with timezone, next-run computation, as pure functions. _Done when:_ unit tests pass, including daylight-saving changes and invalid input.
 - **2.4 Scheduler runtime.** Tick loop, fire a job by sending its prompt into the bot's thread, record a receipt, never fire twice for one occurrence. _Done when:_ a fake-clock test shows exactly-once firing.
 - **2.5 Catch-up.** After downtime, run a missed occurrence once if it is within a window, otherwise skip and record it. _Done when:_ fake-clock tests cover restart, long outage and paused jobs.
-- **2.6 Agent-managed schedules.** The daemon hosts a small tool server (MCP) with create, list, pause and delete schedule, passed to the engine in `session/new` ([OpenCode MCP](https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/mcp-servers.mdx)). _Done when:_ saying "every day at 9, do X" creates the job. If OpenCode's ACP mode doesn't pass tool servers through, we find that out here.
+- **2.6 Agent-managed schedules (CLI).** A `schedule` CLI, built by us and shipped with the daemon, with `create`, `list`, `pause`, `resume` and `delete`. It talks to the daemon's local API, and the daemon fills in which bot and thread called it, so the agent can't touch another bot's jobs. The bot learns about it from its instructions file, and the permission rules allow it without a prompt. We use a CLI rather than an MCP tool server because it needs no tool-server pass-through from the engine, costs no tool-schema tokens per turn, and is easy to test by hand. The same daemon API backs the UI's enable/disable switch (Task 3.2). _Done when:_ saying "every day at 9, do X" makes the bot run the CLI and the job exists, and the CLI's own tests cover bad input and cross-bot access.
 - **2.7 Long tasks and reconnect.** A turn keeps running with no client connected, and a client that reconnects replays missed events. _Done when:_ a multi-minute turn survives a client disconnect (tested).
+- **2.8 Web search.** The bot can search the web and read results without a UI. Candidates, all priced per 1,000 searches as of today: [Parallel](https://docs.parallel.ai) ($1 to $5), [Brave](https://brave.com/search/api/) ($5, own index), [Exa](https://exa.ai) ($4 to $7, semantic), [Tavily](https://www.tavily.com) (about $8, search plus extract). First check whether OpenCode's built-in web tools are enough. Otherwise wrap one provider in a `web-search` CLI, so the agent calls it the same way as the schedule CLI and the provider is swappable. Locally the key comes from an environment variable. In the cloud the call goes through the control plane so no key sits on the VM, the same pattern as Task 5.1. Reading a full page is done by the browser (Task 2.9). _Done when:_ the bot answers a question that needs current information and cites the pages, and the provider choice is recorded in an ADR after trying two on the same five queries.
+- **2.9 Full desktop and browser.** We reuse existing tools and don't expose raw Chromium. Research summary:
+    - _Browser CLIs_ (the agent drives them from its shell with short commands and gets back an accessibility snapshot with element refs, so no vision model is needed for most pages): [agent-browser](https://github.com/vercel-labs/agent-browser) (Vercel, Rust, Chrome), [Playwright CLI](https://playwright.dev/agent-cli/introduction) (Microsoft, also Firefox and WebKit, traces, profiles). [Playwright MCP](https://github.com/microsoft/playwright-mcp) does the same job as tool calls but costs more tokens. [Browser Use](https://github.com/browser-use/browser-use) and [Stagehand](https://docs.stagehand.dev) are libraries with their own agent loop, which duplicates the engine we already have.
+    - _Whole-desktop tools_ (screenshots and mouse/keyboard, or the accessibility tree, so native apps work too): [agent-desktop](https://github.com/vercel-labs/agent-desktop) (CLI and MCP over the OS accessibility tree, Linux included), [Agent S](https://github.com/simular-ai/Agent-S) and [UI-TARS](https://github.com/bytedance/UI-TARS-desktop) (full agent loops, so they compete with our engine), [Cua](https://github.com/trycua/cua) and [E2B Desktop](https://github.com/e2b-dev/desktop) (sandbox desktops, which our per-user VM already is), and the Anthropic Linux reference setup (virtual display plus `xdotool`, a known-good recipe).
+    - _Hosted browsers_ such as Browserbase are skipped: the VM is the browser host and holds the user's logins.
+    - _Plan:_ the VM runs a real desktop (virtual display, light window manager, headed Chrome with a persistent profile), because a full desktop is the better base than a lone browser stream and nothing needs a separate browser product. The engine drives it with CLIs, tentatively a browser CLI (agent-browser or Playwright CLI) for web pages and a desktop CLI (agent-desktop, with screenshot and `xdotool` as the fallback) for everything else. Each is installed with its skill file so the agent learns it on demand. Pick between the two browser CLIs by running the same three tasks on both. Live view and takeover come later (Phase 7); this task only needs the agent to drive the desktop, and we can inspect it with screenshots.
+    - _Done when:_ a bot on a local desktop session completes a multi-step browser task (search, open a result, fill a form) and one task in a non-browser app, and the logins persist across a restart of the session.
+- **2.10 Image input check.** Confirm which Sarvam models can read screenshots, and what the agent does when the model can't (accessibility snapshots only). _Done when:_ the Task 2.9 tasks pass on the chosen default model.
 
 ## Phase 3: web chat against the local daemon
 
 - **3.1 Chat.** Send a message and stream the reply, using chat components in the style of [AI Elements](https://elements.ai-sdk.dev) (conversation, message, prompt input, tool call) and a streaming-markdown renderer, fed by our own event types over a websocket to the daemon. _Done when:_ an end-to-end browser test passes.
-- **3.2 Bots, threads and schedules in the UI.** List and switch bots and threads, view, pause and resume schedules. _Done when:_ a scheduled result appears in the right thread.
-- **3.3 Approval cards.** Allow or deny from the UI. _Done when:_ denying in the UI stops the tool call (tested end to end).
-- **3.4 Activity view.** Live tool calls, file changes and command output. _Done when:_ a running turn shows each step as it happens.
+- **3.2 Bots, threads and schedules in the UI.** List and switch bots and threads. Schedules are view-only plus an enable/disable switch: no create or edit form, and no cron field. Changing a schedule is done by asking the bot in chat, and the bot updates it through the CLI (Task 2.6). The list shows each job's next run and last receipt. _Done when:_ a scheduled result appears in the right thread, toggling a schedule stops and resumes it, and the UI has no way to change its time or prompt.
+- **3.3 Activity view.** Live tool calls, file changes, command output and the browser and desktop steps from Task 2.9 (with screenshots where the agent took them). This comes before approvals because approval cards need something to point at. _Done when:_ a running turn shows each step as it happens.
+- **3.4 Approval cards.** Allow or deny from the UI, shown alongside the step in the activity view. _Done when:_ denying in the UI stops the tool call (tested end to end).
 
 ## Phase 4: one VM in the cloud
 
 - **4.0 Accounts.** The first moment we need to know who a user is. Supabase project (local through its CLI for development, hosted for staging), Google sign-in through its Next.js server-side session helpers, migrations as SQL files, and a first row-level security policy. _Done when:_ sign in and out work, an unauthenticated request is rejected, and a test proves a second user can't read the first user's row.
 - **4.1 AWS foundation.** Separate account for user VMs, network, roles, budget alarms, all as code. _Done when:_ a test budget alarm fires and the stack can be torn down and rebuilt.
-- **4.2 Base image.** Hardened machine image with daemon and OpenCode, IMDSv2 required, no instance role, no inbound ports, built by a pipeline. First confirm every tool in the image has a Linux ARM build (OpenCode does; check Chromium and anything else we add), otherwise build the image for x86. _Done when:_ a launched instance reports ready and a script confirms the safety settings.
+- **4.2 Base image.** Hardened machine image with daemon and OpenCode, IMDSv2 required, no instance role, no inbound ports, built by a pipeline. First confirm every tool in the image has a Linux ARM build (OpenCode does; check Chrome, the desktop stack and anything else we add), otherwise build the image for x86. _Done when:_ a launched instance reports ready and a script confirms the safety settings.
 - **4.3 Relay.** A small websocket service on [ECS Fargate](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/Welcome.html) behind an Application Load Balancer, in the control-plane account. The daemon dials out and the web client connects; events and approvals route through, authenticated with short-lived tokens. One instance at first; adding more later needs a shared message bus between instances. It can't be serverless-function hosting, because it holds long-lived connections. We skip API Gateway WebSockets because its connections are capped at 2 hours with a 10-minute idle timeout and 128 KB messages ([quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-execution-service-websocket-limits-table.html)), which suits live-view frames poorly. _Done when:_ the web chat from Phase 3 works against the cloud VM, and a dropped connection reconnects without losing events.
 - **4.4 Provisioning.** Create a VM on signup, record it, delete it on request. _Done when:_ a new user gets a working VM without manual steps.
 - **4.5 Lifecycle.** Stop when idle (no running turn, nobody watching, no job due soon); start on message with a "waking your computer" state. Measure cold start for plain stop against [hibernation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/hibernating-prerequisites.html) (which must be enabled at launch) and check memory use with several bots. _Done when:_ an idle VM stops and a message wakes it, with measured times recorded.
@@ -152,13 +162,12 @@ User's EC2 VM (hardened image):
 - **6.3 Approval policy.** Actions that change things (send, post, delete) always ask by default. _Done when:_ a send blocks until approved.
 - **6.4 Audit log.** Every tool call, approval and result recorded per user. _Done when:_ a run is fully reconstructable from the log.
 
-## Phase 7: browser and live view
+## Phase 7: live view and takeover
 
-- **7.1 Browser tools.** Chromium on the VM exposed to the engine as tools. _Done when:_ a bot completes a click-through task.
-- **7.2 Live view.** Stream the browser to the web UI using [CDP screencast](https://chromedevtools.github.io/devtools-protocol/). _Done when:_ you can watch a task as it happens.
-- **7.3 Takeover.** You can take control to sign in or solve a captcha, then hand back. _Done when:_ a login flow completes with the user typing credentials directly.
-- **7.4 Full desktop (decide later).** Only if the browser view isn't enough; compare Amazon DCV and noVNC-style options.
-- **7.5 Image input check.** Confirm which Sarvam models can read screenshots. _Done when:_ the browser task passes on a chosen model.
+Browser and desktop control already work from Task 2.9. This phase only lets the user watch and step in.
+
+- **7.1 Live view.** Stream the whole desktop to the web UI, not just the browser. Compare Amazon DCV, noVNC-style VNC and an Xpra/WebRTC option, and check the stream passes through the relay (Task 4.3). _Done when:_ you can watch a task as it happens.
+- **7.2 Takeover.** You can take control to sign in or solve a captcha, then hand back. _Done when:_ a login flow completes with the user typing credentials directly.
 
 ## Phase 8: notifications and onboarding
 
@@ -180,5 +189,5 @@ User's EC2 VM (hardened image):
 - **A recorded session** for the OpenCode hello turn, including the thought chunk, effort option, and `thoughtTokens` seen on the Sarvam `glm5.3` turn. Tests read that file and do not start the engine.
 - **Integration tests** for the daemon with a real OpenCode process.
 - **End-to-end on a real EC2 instance** at the end of Phases 4, 5, 6 and 7: sign up, chat, create a schedule, stop the VM, confirm the wake and the result, confirm an approval blocks, confirm the usage counter moves and the limit fires.
-- **A standing model-fit set** of three real tasks (a daily tracking job, an email summary, a browser click-through), re-run whenever the default model changes.
+- **A standing model-fit set** of three real tasks (a daily tracking job, an email summary, a browser click-through that starts with a web search), re-run whenever the default model changes.
 - **Safety checks** (Tasks 4.2 and 8.3) are repeatable scripts, not one-off reviews.
