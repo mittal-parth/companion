@@ -6,10 +6,23 @@ import type * as acp from "@agentclientprotocol/sdk";
 
 export const sharedPackage = "@companion/shared" as const;
 
-/** Engines a bot can run. A thread remembers which one owns its session. */
-export const engineNames = ["opencode", "claude", "codex"] as const;
+/**
+ * Engines a bot can run. A thread remembers which one owns its session.
+ * Call sites use these names so the set stays in one place.
+ */
+export const engines = {
+  opencode: "opencode",
+  claude: "claude",
+  codex: "codex",
+} as const;
 
-export type EngineName = (typeof engineNames)[number];
+export const engineNames = [
+  engines.opencode,
+  engines.claude,
+  engines.codex,
+] as const;
+
+export type EngineName = (typeof engines)[keyof typeof engines];
 
 /** A named agent. Its conversation keeps the engine it started with. */
 export type Bot = {

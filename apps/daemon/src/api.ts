@@ -1,7 +1,8 @@
 /**
  * Local API for one user's bots.
- * A bot is one long-lived conversation: create it, send a message, and read
- * the turn as server-sent events. The stored thread is that conversation.
+ * A bot is one long-lived conversation: create it, and OpenCode takes the
+ * first turn. Later messages stream as server-sent events. The model keeps
+ * that bot's instructions and memory in its folder.
  */
 import {
   createServer,
@@ -10,8 +11,10 @@ import {
 } from "node:http";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import type * as acp from "@agentclientprotocol/sdk";
 import {
   engineNames,
+  engines,
   type Bot,
   type BotTranscript,
   type BotView,
@@ -167,7 +170,7 @@ async function handle(
     }
     if (req.method === "POST") {
       const body = await readObject(req);
-      const bot = createBot(handler, body);
+      const bot = await createBot(handler, body);
       sendJson(res, 201, bot);
       return;
     }
@@ -199,10 +202,38 @@ async function handle(
   sendJson(res, 404, { error: "Unknown route." });
 }
 
-/** Creates the bot, its folder, and the single conversation row. */
-function createBot(handler: Handler, body: Record<string, unknown>): BotView {
+/**
+ * The first turn of a bot's conversation.
+ * A description is the role to keep. Without one, the bot asks what it is for.
+ * The model writes AGENTS.md and MEMORY.md when the turn gives it something to keep.
+ */
+export function openingPrompt(name: string, description?: string): string {
+  const named = `Your name is ${name}.`;
+  if (description === undefined) {
+    return `${named}\n\nThe person who created you did not say what you are for. Greet them and ask what they want you to do. Do not invent a role.`;
+  }
+  return [
+    named,
+    "",
+    "The person who created you described you this way:",
+    description,
+    "",
+    "Write that into AGENTS.md in your working directory, keeping the meaning, and record your name there. Put any fact worth keeping into MEMORY.md.",
+    "Reply briefly as that bot. If one or two details would change how you do the work, ask those before you start. Otherwise begin.",
+  ].join("\n");
+}
+
+/**
+ * Creates the bot, its folder, and the single conversation.
+ * An OpenCode bot then takes its first turn, so the chat already has a reply.
+ */
+async function createBot(
+  handler: Handler,
+  body: Record<string, unknown>,
+): Promise<BotView> {
   const name = requiredString(body, "name", "A bot needs a name.");
   const engine = engineName(body.engine);
+  const description = optionalDescription(body.description);
   const bot = handler.store.createBot({ name, engine });
   const directory = resolve(dirname(handler.storePath), "bots", bot.id);
   mkdirSync(directory, { recursive: true });
@@ -211,6 +242,24 @@ function createBot(handler: Handler, body: Record<string, unknown>): BotView {
     opencodeModelConfig(handler.model),
   );
   handler.store.createThread({ botId: bot.id, cwd: directory });
+  switch (engine) {
+    case engines.opencode:
+      await runTurn(
+        handler,
+        bot.id,
+        openingPrompt(name, description),
+        () => {},
+      );
+      break;
+    case engines.claude:
+    case engines.codex:
+      // Those engines are not started yet. The folder is ready for them.
+      break;
+    default: {
+      const unexpected: never = engine;
+      throw new Error(`Unexpected engine ${String(unexpected)}.`);
+    }
+  }
   return view(handler.store, bot);
 }
 
@@ -245,25 +294,13 @@ async function sendMessage(
 ): Promise<void> {
   const body = await readObject(req);
   const text = requiredString(body, "text", "A message needs text.");
-  const bot = handler.store.getBot(botId);
-  const thread = botConversation(handler.store, botId);
-  if (bot.engine !== "opencode") {
-    sendJson(res, 400, { error: "This daemon only runs OpenCode." });
-    return;
-  }
-  if (handler.busy.has(botId)) {
-    sendJson(res, 409, { error: "This bot is already working on a turn." });
-    return;
-  }
-  handler.busy.add(botId);
   let started = false;
   try {
-    const stopReason = await handler.engine.prompt(botId, text, (update) => {
+    const stopReason = await runTurn(handler, botId, text, (update) => {
       if (!started) {
         started = true;
         res.writeHead(200, sseHeaders);
       }
-      handler.store.appendUpdate(thread.id, update);
       writeEvent(res, { event: "update", data: update });
     });
     if (!started) {
@@ -275,13 +312,41 @@ async function sendMessage(
   } catch (error) {
     const message = httpStatus(error).message;
     if (!started) {
-      sendJson(res, 500, { error: message });
+      sendJson(res, httpStatus(error).status, { error: message });
       return;
     }
     if (!res.writableEnded) {
       writeEvent(res, { event: "error", data: { error: message } });
       res.end();
     }
+  }
+}
+
+/**
+ * Runs one turn and stores each update before the caller sees it.
+ * The busy set is taken before any wait, so two turns of one bot cannot overlap
+ * and two bots can.
+ */
+async function runTurn(
+  handler: Handler,
+  botId: string,
+  text: string,
+  onUpdate: (update: acp.SessionUpdate) => void,
+): Promise<acp.StopReason> {
+  const bot = handler.store.getBot(botId);
+  if (bot.engine !== engines.opencode) {
+    throw new HttpError(400, "This daemon only runs OpenCode.");
+  }
+  if (handler.busy.has(botId)) {
+    throw new HttpError(409, "This bot is already working on a turn.");
+  }
+  handler.busy.add(botId);
+  const thread = botConversation(handler.store, botId);
+  try {
+    return await handler.engine.prompt(botId, text, (update) => {
+      handler.store.appendUpdate(thread.id, update);
+      onUpdate(update);
+    });
   } finally {
     handler.busy.delete(botId);
   }
@@ -326,7 +391,8 @@ function httpStatus(error: unknown): { status: number; message: string } {
     message.startsWith("A bot needs") ||
     message.startsWith("Unknown engine") ||
     message.startsWith("The request") ||
-    message.startsWith("A message needs")
+    message.startsWith("A message needs") ||
+    message.startsWith("A description must")
   ) {
     return { status: 400, message };
   }
@@ -384,8 +450,19 @@ function requiredString(
   return value.trim();
 }
 
+/** A description is optional. Blank text is the same as leaving it out. */
+function optionalDescription(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new HttpError(400, "A description must be text.");
+  }
+  const description = value.trim();
+  if (description === "") return undefined;
+  return description;
+}
+
 function engineName(value: unknown): EngineName {
-  if (value === undefined) return "opencode";
+  if (value === undefined) return engines.opencode;
   if (typeof value !== "string") {
     throw new HttpError(400, "A bot's engine must be a name.");
   }
