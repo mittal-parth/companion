@@ -100,6 +100,9 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: ^2.4.0
         version: 2.4.0(@modelcontextprotocol/server@2.4.0)(zod@4.6.7)
+      croner:
+        specifier: ^11.0.0
+        version: 11.0.0
 
 packages:
 
@@ -1344,6 +1347,10 @@ packages:
 
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
+
+  croner@11.0.0:
+    resolution: {integrity: sha512-T17ADjdttrVToyzLpLq9Xb9xzcMwpQ/M3Qs9szhh0MVNTbv6NWQ9OFYa2qlzPYXFMn+uoDlnW1IpIv6cAvFtyA==}
+    engines: {node: '>=18.0'}
 
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
@@ -4320,6 +4327,8 @@ snapshots:
       semver: 7.8.6
 
   convert-source-map@2.0.0: {}
+
+  croner@11.0.0: {}
 
   cross-spawn@7.0.6:
     dependencies:
