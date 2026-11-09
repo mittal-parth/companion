@@ -53,3 +53,7 @@ _Avoid_: event, delta
 **Approval**:
 The user's allow-or-deny decision on a sensitive action the engine wants to take.
 _Avoid_: permission
+
+**Schedule**:
+A rule that sends one prompt into a bot's conversation at later times. It is a calendar cron, an elapsed interval, or a single instant. The maths names each occurrence; the daemon fires it later.
+_Avoid_: job, routine

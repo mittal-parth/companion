@@ -1,5 +1,5 @@
 /**
- * Shared types for bots, threads, a recorded engine turn, and an approval.
+ * Shared types for bots, threads, a recorded engine turn, an approval, and a schedule.
  * Session update fields match what OpenCode sent, stored in the hello fixture.
  */
 import type * as acp from "@agentclientprotocol/sdk";
@@ -111,3 +111,15 @@ export type RecordedSession = {
     _meta?: Record<string, unknown>;
   };
 };
+
+export {
+  nextRun,
+  nextRuns,
+  validateSchedule,
+  type CronSchedule,
+  type IntervalSchedule,
+  type OnceSchedule,
+  type Schedule,
+  type ScheduleValidation,
+  type ScheduleWindow,
+} from "./schedule.js";
