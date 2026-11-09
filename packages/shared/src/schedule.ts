@@ -5,34 +5,23 @@
  * computer from the same instants. Both call these functions. Nothing here
  * stores a schedule or starts a turn.
  *
- * A cron schedule is a calendar time in its own timezone. An interval is a
- * fixed number of real minutes from an anchor, so "every two hours" does not
- * drift across a daylight-saving change. A once schedule is a single instant.
+ * Croner computes the calendar dates, including daylight saving. This file
+ * decides which kind of schedule it is, refuses anything closer than five
+ * minutes, and steps an interval in real minutes rather than clock hours.
  * The instant `nextRun` returns is the occurrence: pass it back as `now` and
  * the following occurrence comes back.
  */
-import { Cron, CronPattern } from "croner";
+import { Cron, CronDate, CronPattern } from "croner";
 
 const minimumGapMinutes = 5;
 const maxIntervalMinutes = 24 * 60;
 const minuteMs = 60_000;
 const minutesPerDay = 24 * 60;
-const dayMs = minutesPerDay * minuteMs;
 /** Long enough to see a weekday line up with any 5-minute grid. */
 const intervalSearchSteps = 11_000;
 
 const ianaZone = /^(?:UTC|[A-Za-z][\w+-]*(?:\/[\w+-]+){1,2})$/;
 const clockTime = /^([01]\d|2[0-3]):([0-5]\d)$/;
-
-const weekdayNumber: Readonly<Record<string, number>> = {
-  Sun: 0,
-  Mon: 1,
-  Tue: 2,
-  Wed: 3,
-  Thu: 4,
-  Fri: 5,
-  Sat: 6,
-};
 
 /** A same-day limit on an interval. `start` runs, `end` does not. */
 export type ScheduleWindow = {
@@ -266,147 +255,51 @@ function parseCron(expression: string, timezone: string): CronPattern {
 }
 
 /**
- * Reject a cron whose clock times can fall under 5 minutes apart.
- * Day restrictions only remove runs, so a clock gap of 5 minutes or more is
- * always far enough. A closer pair is allowed only when no real day matches
- * it, such as 31 February.
+ * Reject a cron whose runs can fall under 5 minutes apart.
+ * Croner already parsed the hours and minutes. A clock gap of 5 minutes or
+ * more never fires sooner, so those expressions stop here. A closer pair is
+ * kept only when no real day matches it, which croner's own next run reports.
  */
 function closerThanMinimum(expression: string, timezone: string): boolean {
   const pattern = parseCron(expression, timezone);
-  const clock = clockMinutesOf(pattern);
-  if (clock.length === 0) return false;
-  const firstMinute = clock[0] ?? 0;
-  const lastMinute = clock[clock.length - 1] ?? firstMinute;
-  let sameDay = minutesPerDay;
-  for (let index = 1; index < clock.length; index += 1) {
-    const earlier = clock[index - 1] ?? 0;
-    const later = clock[index] ?? earlier;
-    sameDay = Math.min(sameDay, later - earlier);
-  }
-  const wrap =
-    clock.length === 1
-      ? minutesPerDay
-      : minutesPerDay - lastMinute + firstMinute;
-  if (sameDay >= minimumGapMinutes && wrap >= minimumGapMinutes) return false;
-  if (sameDay < minimumGapMinutes) {
-    const first = cronOf(expression, timezone).nextRun(
-      new Date(Date.UTC(2020, 0, 1)),
-    );
-    return first !== null && first.getTime() < Date.UTC(2040, 0, 1);
-  }
-  if (runsEveryDay(pattern)) return true;
-  // The only remaining short gap is overnight. Adjacent weekdays meet it; others do not.
-  const overnight = overnightGap(pattern);
-  if (overnight !== "scan") return overnight;
-  return wrapHappens(expression, timezone, lastMinute, firstMinute);
-}
-
-function clockMinutesOf(pattern: CronPattern): number[] {
-  const minutes = selected(pattern.minute);
-  const hours = selected(pattern.hour);
   const clock: number[] = [];
-  for (const hour of hours) {
-    for (const minute of minutes) clock.push(hour * 60 + minute);
+  for (let hour = 0; hour < pattern.hour.length; hour += 1) {
+    if (!pattern.hour[hour]) continue;
+    for (let minute = 0; minute < pattern.minute.length; minute += 1) {
+      if (pattern.minute[minute]) clock.push(hour * 60 + minute);
+    }
   }
   clock.sort((left, right) => left - right);
-  return clock;
-}
-
-function selected(flags: number[]): number[] {
-  const values: number[] = [];
-  for (let index = 0; index < flags.length; index += 1) {
-    if (flags[index]) values.push(index);
+  const first = clock[0];
+  const last = clock[clock.length - 1];
+  if (first === undefined || last === undefined) return false;
+  let gap = minutesPerDay;
+  for (let index = 1; index < clock.length; index += 1) {
+    const earlier = clock[index - 1];
+    const later = clock[index];
+    if (earlier === undefined || later === undefined) continue;
+    gap = Math.min(gap, later - earlier);
   }
-  return values;
-}
+  if (clock.length > 1) gap = Math.min(gap, minutesPerDay - last + first);
+  if (gap >= minimumGapMinutes) return false;
 
-function runsEveryDay(pattern: CronPattern): boolean {
-  return (
-    pattern.starDOM &&
-    pattern.starDOW &&
-    !pattern.lastDayOfMonth &&
-    !pattern.lastWeekday &&
-    pattern.month.every(Boolean) &&
-    pattern.nearestWeekdays.every((flag) => flag === 0)
-  );
-}
-
-/**
- * Whether the overnight pair can land on two calendar days this expression matches.
- * A day-of-week list is enough to know. A day-of-month limit needs a search.
- */
-function overnightGap(pattern: CronPattern): boolean | "scan" {
-  if (
-    !pattern.starDOM ||
-    pattern.lastDayOfMonth ||
-    pattern.lastWeekday ||
-    pattern.nearestWeekdays.some((flag) => flag !== 0)
-  ) {
-    return "scan";
-  }
-  const days = selected(pattern.dayOfWeek);
-  for (const day of days) {
-    if (days.includes((day + 1) % 7)) return true;
-  }
-  return false;
-}
-
-/** True when the last clock time of a day and the first of the next day both run. */
-function wrapHappens(
-  expression: string,
-  timezone: string,
-  late: number,
-  early: number,
-): boolean {
   const cron = cronOf(expression, timezone);
-  let cursor = Date.UTC(2024, 0, 1);
+  let previous: number | null = null;
+  let cursor = new Date(Date.UTC(2024, 0, 1));
   const end = Date.UTC(2028, 0, 1);
-  while (cursor < end) {
-    const next = cron.nextRun(new Date(cursor));
+  for (let step = 0; step < 8_000 && cursor.getTime() < end; step += 1) {
+    const next = cron.nextRun(cursor);
     if (next === null || next.getTime() >= end) return false;
-    const local = wallClock(next.getTime(), timezone);
-    const tomorrow = addDays(local, 1);
-    const lateAt = utcFromWall(
-      timezone,
-      local.year,
-      local.month,
-      local.day,
-      late,
-    );
-    const earlyAt = utcFromWall(
-      timezone,
-      tomorrow.year,
-      tomorrow.month,
-      tomorrow.day,
-      early,
-    );
     if (
-      lateAt !== null &&
-      earlyAt !== null &&
-      earlyAt - lateAt < minimumGapMinutes * minuteMs &&
-      cronHits(cron, lateAt) &&
-      cronHits(cron, earlyAt)
+      previous !== null &&
+      next.getTime() - previous < minimumGapMinutes * minuteMs
     ) {
       return true;
     }
-    const nextDay = utcFromWall(
-      timezone,
-      tomorrow.year,
-      tomorrow.month,
-      tomorrow.day,
-      0,
-    );
-    cursor =
-      nextDay !== null && nextDay > next.getTime()
-        ? nextDay
-        : next.getTime() + dayMs;
+    previous = next.getTime();
+    cursor = next;
   }
   return false;
-}
-
-function cronHits(cron: Cron, at: number): boolean {
-  const next = cron.nextRun(new Date(at - 1000));
-  return next !== null && next.getTime() === at;
 }
 
 function nextInterval(schedule: IntervalSchedule, now: number): number | null {
@@ -444,17 +337,17 @@ function pastEnd(schedule: IntervalSchedule, at: number): boolean {
 }
 
 function intervalAllows(schedule: IntervalSchedule, at: number): boolean {
-  const local = wallClock(at, schedule.timezone);
+  const local = zoned(at, schedule.timezone);
   if (
     schedule.weekdays !== undefined &&
     !schedule.weekdays.includes(local.weekday)
-  )
+  ) {
     return false;
+  }
   if (schedule.window === undefined) return true;
-  const minute = local.hour * 60 + local.minute;
   const start = minutesOfClock(schedule.window.start);
   const end = minutesOfClock(schedule.window.end);
-  return minute >= start && minute < end;
+  return local.minute >= start && local.minute < end;
 }
 
 /** The next grid point inside a later allowed weekday and window. */
@@ -463,201 +356,107 @@ function nextOpening(
   candidate: number,
   step: number,
 ): number | null {
-  const local = wallClock(candidate, schedule.timezone);
+  const local = zoned(candidate, schedule.timezone);
   const start =
     schedule.window === undefined ? 0 : minutesOfClock(schedule.window.start);
-  const minute = local.hour * 60 + local.minute;
   const weekdayOk =
     schedule.weekdays === undefined ||
     schedule.weekdays.includes(local.weekday);
-  // Still before today's window: try today. Otherwise the next allowed weekday.
-  const daysAhead =
-    weekdayOk && minute < start
-      ? 0
-      : daysUntilWeekday(local.weekday, schedule.weekdays);
-  const date = addDays(local, daysAhead);
-  const opening = utcAtOrAfterWall(
+  let daysAhead = 1;
+  if (weekdayOk && local.minute < start) {
+    daysAhead = 0;
+  } else if (schedule.weekdays !== undefined) {
+    for (let ahead = 1; ahead <= 7; ahead += 1) {
+      if (schedule.weekdays.includes((local.weekday + ahead) % 7)) {
+        daysAhead = ahead;
+        break;
+      }
+    }
+  }
+  const date = new Date(
+    Date.UTC(local.year, local.month - 1, local.day + daysAhead),
+  );
+  const opening = atWall(
     schedule.timezone,
-    date.year,
-    date.month,
-    date.day,
+    date.getUTCFullYear(),
+    date.getUTCMonth() + 1,
+    date.getUTCDate(),
     start,
   );
   if (opening === null) return null;
-  // A skipped daylight-saving hour can put the opening on the candidate already rejected.
   const earliest = Math.max(opening, candidate + minuteMs);
-  return ceilGrid(schedule.anchorAt, step, earliest);
-}
-
-function daysUntilWeekday(
-  weekday: number,
-  weekdays: number[] | undefined,
-): number {
-  if (weekdays === undefined) return 1;
-  for (let ahead = 1; ahead <= 7; ahead += 1) {
-    if (weekdays.includes((weekday + ahead) % 7)) return ahead;
-  }
-  return 1;
-}
-
-function ceilGrid(
-  anchorAt: number,
-  step: number,
-  target: number,
-): number | null {
-  if (target <= anchorAt) return anchorAt;
-  const steps = Math.ceil((target - anchorAt) / step);
-  const at = anchorAt + steps * step;
+  if (earliest <= schedule.anchorAt) return schedule.anchorAt;
+  const steps = Math.ceil((earliest - schedule.anchorAt) / step);
+  const at = schedule.anchorAt + steps * step;
   if (!Number.isSafeInteger(at)) return null;
-  return at < target ? at + step : at;
+  return at < earliest ? at + step : at;
 }
 
-type Wall = {
+/** Wall-clock fields of an instant, read by croner in the schedule's zone. */
+function zoned(
+  ms: number,
+  timezone: string,
+): {
   year: number;
   month: number;
   day: number;
-  hour: number;
   minute: number;
   weekday: number;
-};
-
-function wallClock(epochMs: number, timeZone: string): Wall {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    weekday: "short",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date(epochMs));
-  const read = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((part) => part.type === type)?.value ?? "";
-  let hour = Number(read("hour"));
-  if (hour === 24) hour = 0;
+} {
+  const local = new CronDate(new Date(ms), timezone);
   return {
-    year: Number(read("year")),
-    month: Number(read("month")),
-    day: Number(read("day")),
-    hour,
-    minute: Number(read("minute")),
-    weekday: weekdayNumber[read("weekday")] ?? 0,
+    year: local.year,
+    month: local.month + 1,
+    day: local.day,
+    minute: local.hour * 60 + local.minute,
+    weekday: new Date(Date.UTC(local.year, local.month, local.day)).getUTCDay(),
   };
-}
-
-/** The UTC instant of a wall-clock minute, or null when that minute is skipped. */
-function utcFromWall(
-  timeZone: string,
-  year: number,
-  month: number,
-  day: number,
-  minuteOfDay: number,
-): number | null {
-  const hour = Math.floor(minuteOfDay / 60);
-  const minute = minuteOfDay % 60;
-  const asUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
-  const candidates = [
-    asUtc,
-    asUtc - 14 * 60 * minuteMs,
-    asUtc + 14 * 60 * minuteMs,
-  ];
-  const hits: number[] = [];
-  for (const guess of candidates) {
-    const utc = guess - zoneOffsetMs(guess, timeZone);
-    const local = wallClock(utc, timeZone);
-    if (
-      local.year === year &&
-      local.month === month &&
-      local.day === day &&
-      local.hour === hour &&
-      local.minute === minute
-    ) {
-      hits.push(utc);
-    }
-    const adjusted = guess - zoneOffsetMs(utc, timeZone);
-    const second = wallClock(adjusted, timeZone);
-    if (
-      second.year === year &&
-      second.month === month &&
-      second.day === day &&
-      second.hour === hour &&
-      second.minute === minute
-    ) {
-      hits.push(adjusted);
-    }
-  }
-  if (hits.length === 0) return null;
-  return Math.min(...hits);
 }
 
 /**
- * The first real instant at or after a wall-clock minute.
- * A daylight-saving gap has no exact minute, so the search continues until
- * the clock shows that minute or a later one.
+ * The UTC instant of a wall-clock minute in a timezone.
+ * A daylight-saving gap has no such minute, so the result is the first real
+ * minute at or after it.
  */
-function utcAtOrAfterWall(
-  timeZone: string,
+function atWall(
+  timezone: string,
   year: number,
   month: number,
   day: number,
   minuteOfDay: number,
 ): number | null {
-  const exact = utcFromWall(timeZone, year, month, day, minuteOfDay);
-  if (exact !== null) return exact;
-  const start = Date.UTC(year, month - 1, day) - 14 * 60 * minuteMs;
-  const limit = start + 40 * 60 * minuteMs;
+  const local = new CronDate(null, timezone);
+  local.year = year;
+  local.month = month - 1;
+  local.day = day;
+  local.hour = Math.floor(minuteOfDay / 60);
+  local.minute = minuteOfDay % 60;
+  local.second = 0;
+  local.ms = 0;
+  const at = local.getTime();
+  const back = new CronDate(new Date(at), timezone);
+  if (
+    back.year === year &&
+    back.month === month - 1 &&
+    back.day === day &&
+    back.hour * 60 + back.minute === minuteOfDay
+  ) {
+    return at;
+  }
   const target = ((year * 100 + month) * 100 + day) * 10_000 + minuteOfDay;
-  for (let cursor = start; cursor <= limit; cursor += minuteMs) {
-    const local = wallClock(cursor, timeZone);
+  for (
+    let cursor = at - 3 * 60 * minuteMs;
+    cursor <= at + 3 * 60 * minuteMs;
+    cursor += minuteMs
+  ) {
+    const seen = new CronDate(new Date(cursor), timezone);
     const stamp =
-      ((local.year * 100 + local.month) * 100 + local.day) * 10_000 +
-      local.hour * 60 +
-      local.minute;
+      ((seen.year * 100 + (seen.month + 1)) * 100 + seen.day) * 10_000 +
+      seen.hour * 60 +
+      seen.minute;
     if (stamp >= target) return cursor;
   }
   return null;
-}
-
-function zoneOffsetMs(epochMs: number, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date(epochMs));
-  const read = (type: Intl.DateTimeFormatPartTypes) =>
-    Number(parts.find((part) => part.type === type)?.value);
-  let hour = read("hour");
-  if (hour === 24) hour = 0;
-  return (
-    Date.UTC(
-      read("year"),
-      read("month") - 1,
-      read("day"),
-      hour,
-      read("minute"),
-      read("second"),
-    ) - epochMs
-  );
-}
-
-function addDays(
-  local: Wall,
-  days: number,
-): { year: number; month: number; day: number } {
-  const date = new Date(
-    Date.UTC(local.year, local.month - 1, local.day + days),
-  );
-  return {
-    year: date.getUTCFullYear(),
-    month: date.getUTCMonth() + 1,
-    day: date.getUTCDate(),
-  };
 }
 
 function weekdaysOf(value: unknown): number[] | undefined | "invalid" {
