@@ -93,6 +93,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         model,
         dataHome: join(root, "opencode-data"),
         configHome: join(root, "opencode-config"),
+        binDir: join(root, "bin"),
       }));
   } catch (error) {
     store.close();

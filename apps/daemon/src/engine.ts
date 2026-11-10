@@ -4,8 +4,9 @@
  * After a restart, the stored session id is loaded instead of replaced.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { engines } from "@companion/shared";
@@ -37,6 +38,8 @@ AGENTS.md in your working directory is your instructions: who you are and what y
 Read both files at the start of a turn when they exist. The copies on disk are the latest. Use your file tools. Do not rely on an earlier reading.
 
 When the user tells you what you are for, or changes that, update AGENTS.md in your working directory. When they tell you something worth keeping, update MEMORY.md there. Skip a write when nothing new belongs in either file.
+
+When the user wants something to happen later or on a repeat, load the schedules skill and use the schedule command. Never keep a schedule in AGENTS.md or MEMORY.md.
 
 If AGENTS.md does not yet say what you are for, ask the user. Do not invent a role.
 
@@ -102,6 +105,69 @@ export function installOpencodeConfig(configHome: string, model: string): void {
   mkdirSync(directory, { recursive: true });
   writeFileSync(join(directory, "opencode.json"), opencodeModelConfig(model));
   writeFileSync(join(directory, "AGENTS.md"), standingInstructions());
+  writeFileSync(
+    join(directory, "skills", "schedules", "SKILL.md"),
+    scheduleSkill(),
+  );
+}
+
+/**
+ * Puts the `schedule` command on the bot's PATH.
+ * The shim runs the CLI with this same Node, so the bot just types `schedule`.
+ */
+export function installScheduleShim(binDir: string): void {
+  mkdirSync(binDir, { recursive: true });
+  const cli = fileURLToPath(new URL("./schedule-cli.ts", import.meta.url));
+  const path = join(binDir, "schedule");
+  writeFileSync(path, `#!/bin/sh\nexec "${process.execPath}" "${cli}" "$@"\n`);
+  chmodSync(path, 0o755);
+}
+
+/**
+ * Teaches a bot to manage its own schedules with the `schedule` command.
+ * OpenCode loads this as a skill. The standing instructions only point to it.
+ */
+export function scheduleSkill(): string {
+  return `---
+name: schedules
+description: Create, list, pause, resume and delete this bot's scheduled prompts with the schedule command.
+---
+
+# Schedules
+
+Use this when the person wants something to happen at a time, on a repeat, or as a reminder. A schedule sends its prompt back into this same conversation later. It runs only while the computer is on, so do not promise it will run if the computer is off.
+
+## Timezone first
+
+Look in MEMORY.md for a line starting \`Timezone:\`. If it is there, use that IANA timezone. If it is not, ask the person for theirs (for example Asia/Kolkata) and write \`Timezone: <zone>\` into MEMORY.md before you create anything. Never guess a timezone.
+
+## The prompt
+
+The prompt is an instruction to yourself, run later with no one watching. Write it so it makes sense on its own, for example "Check the weather in Pune and tell the person if they need an umbrella."
+
+## Commands
+
+\`\`\`
+schedule create --prompt "text" --cron "0 9 * * *" --tz Asia/Kolkata
+schedule create --prompt "text" --every 30m [--tz Asia/Kolkata] [--weekdays mon,fri] [--window 09:00-17:00] [--until 2026-12-31T00:00:00+05:30]
+schedule create --prompt "text" --at 2026-11-12T09:00:00+05:30
+schedule list
+schedule pause <id>
+schedule resume <id>
+schedule delete <id>
+\`\`\`
+
+- \`--cron\` is five fields: minute, hour, day of month, month, day of week. It always needs \`--tz\`.
+- \`--every\` takes \`30m\`, \`2h\` or \`1d\`. Add \`--tz\` when you use \`--weekdays\` or \`--window\`. Weekdays are sun, mon, tue, wed, thu, fri, sat.
+- \`--at\` is one instant with an offset, like \`2026-11-12T09:00:00+05:30\`.
+- \`--window\` is \`HH:MM-HH:MM\`. The start runs and the end does not.
+
+## After you run one
+
+Run \`schedule list\` and tell the person, in plain words and in their timezone, what will run and when. Read \`nextRunAt\` for the next time. Use \`pause <id>\` when they want it off for now and \`delete <id>\` when they never want it. Take ids from \`schedule list\`.
+
+The command prints one JSON line. When it says \`"ok": false\`, read \`error\`, fix the command and try again. Do not work around it by editing files or calling the daemon yourself.
+`;
 }
 
 /** Speaks ACP for the daemon. One prompt is one turn of a bot's conversation. */
@@ -124,6 +190,8 @@ export async function startOpencodeEngine(options: {
   model: string;
   dataHome: string;
   configHome: string;
+  /** A directory prepended to PATH, holding the `schedule` command. */
+  binDir: string;
 }): Promise<Engine> {
   if (
     options.model.startsWith("sarvam/") &&
@@ -134,6 +202,7 @@ export async function startOpencodeEngine(options: {
   // Written before the process starts, so session/new already lists this model
   // and every bot is told to keep its own AGENTS.md and MEMORY.md.
   installOpencodeConfig(options.configHome, options.model);
+  installScheduleShim(options.binDir);
   mkdirSync(options.dataHome, { recursive: true });
 
   const env = { ...process.env };
@@ -142,6 +211,7 @@ export async function startOpencodeEngine(options: {
   delete env.OPENCODE_CONFIG_DIR;
   env.XDG_CONFIG_HOME = options.configHome;
   env.XDG_DATA_HOME = options.dataHome;
+  env.PATH = `${options.binDir}${delimiter}${env.PATH ?? ""}`;
 
   const child = spawn(
     options.bin,
