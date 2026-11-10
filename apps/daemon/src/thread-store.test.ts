@@ -161,12 +161,14 @@ test("a schedule and its finished occurrences survive a restart", () => {
       at: 1_700_000_000_000,
     };
     store.saveSchedule(schedule);
-    store.recordReceipt(schedule.id, schedule.at);
+    store.recordReceipt(schedule.id, schedule.at, "ran");
     store.close();
 
     const restored = openThreadStore(path);
     expect(restored.listSchedules(bot.id)).toEqual([schedule]);
-    expect(restored.receipts(schedule.id)).toEqual([schedule.at]);
+    expect(restored.receipts(schedule.id)).toEqual([
+      { occurrence: schedule.at, outcome: "ran" },
+    ]);
     expect(restored.latestReceipt(schedule.id)).toBe(schedule.at);
     restored.deleteSchedule(schedule.id);
     expect(restored.hasSchedule(schedule.id)).toBe(false);
@@ -201,16 +203,76 @@ test("an older thread database gains schedules on open", () => {
   });
 });
 
+test("a schedule database from the previous version keeps its receipts", () => {
+  withDirectory((directory) => {
+    const path = join(directory, "threads.db");
+    const db = new DatabaseSync(path);
+    db.exec(`
+      CREATE TABLE bots (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        engine TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE schedules (
+        id TEXT PRIMARY KEY,
+        bot_id TEXT NOT NULL REFERENCES bots(id),
+        body TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE schedule_receipts (
+        schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+        occurrence INTEGER NOT NULL,
+        PRIMARY KEY (schedule_id, occurrence)
+      ) STRICT;
+    `);
+    db.exec("PRAGMA user_version = 2");
+    const schedule = {
+      id: "weather",
+      botId: "ada",
+      prompt: "Check the weather",
+      kind: "once" as const,
+      at: 1_700_000_000_000,
+    };
+    db.prepare("INSERT INTO bots (id, name, engine) VALUES (?, ?, ?)").run(
+      "ada",
+      "Ada",
+      "opencode",
+    );
+    db.prepare("INSERT INTO schedules (id, bot_id, body) VALUES (?, ?, ?)").run(
+      schedule.id,
+      schedule.botId,
+      JSON.stringify(schedule),
+    );
+    db.prepare(
+      "INSERT INTO schedule_receipts (schedule_id, occurrence) VALUES (?, ?)",
+    ).run(schedule.id, schedule.at);
+    db.close();
+
+    const restored = openThreadStore(path);
+    expect(restored.receipts(schedule.id)).toEqual([
+      { occurrence: schedule.at, outcome: "ran" },
+    ]);
+    expect(restored.scheduleCreatedAt(schedule.id)).toBeGreaterThan(
+      Date.now() - 60_000,
+    );
+    restored.recordReceipt(schedule.id, schedule.at + 60_000, "skipped");
+    expect(restored.receipts(schedule.id)).toEqual([
+      { occurrence: schedule.at, outcome: "ran" },
+      { occurrence: schedule.at + 60_000, outcome: "skipped" },
+    ]);
+    restored.close();
+  });
+});
+
 test("a newer thread database is refused", () => {
   withDirectory((directory) => {
     const path = join(directory, "threads.db");
     const store = openThreadStore(path);
     store.close();
     const db = new DatabaseSync(path);
-    db.exec("PRAGMA user_version = 3");
+    db.exec("PRAGMA user_version = 4");
     db.close();
     expect(() => openThreadStore(path)).toThrow(
-      "Unsupported thread store version 3.",
+      "Unsupported thread store version 4.",
     );
   });
 });
