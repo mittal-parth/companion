@@ -111,18 +111,6 @@ export function opencodeModelConfig(model: string): string {
                 output: 8192,
               },
             },
-            "sarvam-105b": {
-              name: "Sarvam 105B",
-              capabilities: {
-                tools: true,
-                input: ["text"],
-                output: ["text"],
-              },
-              limit: {
-                context: 128000,
-                output: 8192,
-              },
-            },
           },
         },
       },
