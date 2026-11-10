@@ -21,6 +21,7 @@ import {
   type BotView,
   type EngineName,
   type Schedule,
+  type ScheduleLogEntry,
   type TurnEvent,
 } from "@companion/shared";
 import {
@@ -46,6 +47,10 @@ export type Daemon = {
   listSchedules(botId?: string): Schedule[];
   /** Stops a schedule and removes it. */
   deleteSchedule(id: string): void;
+  /** Stops a schedule from firing until it is resumed. */
+  pauseSchedule(id: string): void;
+  /** Lets a paused schedule fire at its next slot. Missed slots are skipped. */
+  resumeSchedule(id: string): void;
   /** Occurrences whose turns came back, oldest first. */
   receipts(scheduleId: string): number[];
   close(): Promise<void>;
@@ -62,6 +67,8 @@ export type DaemonOptions = {
   opencodeBin?: string;
   /** OpenCode model id. Defaults to Sarvam GLM 5.3. */
   model?: string;
+  /** Receives each schedule event. Defaults to one JSON line per event on stderr. */
+  log?: (entry: ScheduleLogEntry) => void;
 };
 
 /**
@@ -159,6 +166,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   const scheduler = startScheduler({
     store,
     send: (botId, text) => runTurnWhenFree(handler, botId, text),
+    log: options.log ?? logToStderr,
   });
 
   let closed = false;
@@ -168,6 +176,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     createSchedule: (input) => scheduler.create(input),
     listSchedules: (botId) => scheduler.list(botId),
     deleteSchedule: (id) => scheduler.delete(id),
+    pauseSchedule: (id) => scheduler.pause(id),
+    resumeSchedule: (id) => scheduler.resume(id),
     receipts: (scheduleId) => scheduler.receipts(scheduleId),
     async close() {
       if (closed) return;
@@ -194,6 +204,11 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       }
     },
   };
+}
+
+/** The default schedule log: one JSON line per event, easy to search later. */
+function logToStderr(entry: ScheduleLogEntry): void {
+  process.stderr.write(`${JSON.stringify({ scope: "schedule", ...entry })}\n`);
 }
 
 type Handler = {
