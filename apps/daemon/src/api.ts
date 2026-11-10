@@ -21,6 +21,7 @@ import {
   type BotView,
   type EngineName,
   type Schedule,
+  type ScheduleReceipt,
   type TurnEvent,
 } from "@companion/shared";
 import {
@@ -46,8 +47,8 @@ export type Daemon = {
   listSchedules(botId?: string): Schedule[];
   /** Stops a schedule and removes it. */
   deleteSchedule(id: string): void;
-  /** Occurrences whose turns came back, oldest first. */
-  receipts(scheduleId: string): number[];
+  /** Slots the daemon has decided, oldest first. */
+  receipts(scheduleId: string): ScheduleReceipt[];
   close(): Promise<void>;
 };
 
