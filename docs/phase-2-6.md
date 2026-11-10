@@ -17,7 +17,9 @@ flowchart LR
   scheduler --> log["one JSON line per event"]
 ```
 
-All bots share one OpenCode process, so a bot cannot have its own environment variable. Instead the daemon writes `.companion/schedule.json` into the bot's folder with the daemon's address and a secret token, and rewrites it on every start because the port and the token change. The CLI finds that file by walking up from its working directory, so it still works from a subfolder. The token tells the daemon which bot is calling. The CLI never sends a bot id, and a schedule that belongs to another bot comes back as "unknown schedule".
+The daemon is one process, and it starts one `opencode acp` child and keeps that child for as long as it runs. Each bot is its own session inside that child, with its own folder and its own conversation. The chats stay separate. The process does not: every bot's turn goes through the same OpenCode process, so they share its environment variables. A token in the environment would be visible to every bot, which is why the daemon writes `.companion/schedule.json` into the bot's folder instead, with the daemon's address and a secret token. It rewrites that file on every start because the port and the token change. The CLI finds the file by walking up from its working directory, so it still works from a subfolder. The token tells the daemon which bot is calling. The CLI never sends a bot id, and a schedule that belongs to another bot comes back as "unknown schedule".
+
+`POST /agent/schedules` is a request to that same daemon. The daemon listens for HTTP on `127.0.0.1`. The `schedule` command is a short program the bot runs, and that program sends the request. The daemon checks the token, stores the schedule in its own database, and later sends the prompt into the bot's session.
 
 This only separates bots that behave. They share one computer, so a bot that can read files can read another bot's token file. Real isolation comes with the per-user machines.
 
@@ -25,10 +27,10 @@ This only separates bots that behave. They share one computer, so a bot that can
 
 Monday evening, "every day at 9, check the weather", and the person is in `Asia/Kolkata`:
 
-1. The bot loads the `schedules` skill. The standing rules only point at it. The bot's own `AGENTS.md` is not where schedules live.
+1. The bot loads the `schedules` skill. Its text is `apps/daemon/skills/schedules/SKILL.md`, and the daemon copies that folder into OpenCode's config when it starts. The standing rules only point at it. The bot's own `AGENTS.md` is not where schedules live.
 2. The skill says to read `MEMORY.md` for a `Timezone:` line. There is none, so the bot asks, the person answers `Asia/Kolkata`, and the bot writes `Timezone: Asia/Kolkata` into `MEMORY.md`. It does not guess.
 3. The bot runs `schedule create --prompt "Check the weather in Pune and tell the person if they need an umbrella." --cron "0 9 * * *" --tz Asia/Kolkata`. The prompt is an instruction to itself, because it arrives later as a message in this same conversation.
-4. The CLI reads `.companion/schedule.json`, sends `POST /agent/schedules` with the token, and prints one JSON line. The daemon fills in the bot and the id, checks the expression and the timezone, stores the row and arms Tuesday 9:00.
+4. The CLI reads `.companion/schedule.json` and sends `POST /agent/schedules` to the daemon, with the token. The daemon fills in the bot and the id, checks the expression and the timezone, stores the row and arms Tuesday 9:00. The CLI prints one JSON line.
 5. The bot runs `schedule list` and tells the person, in their own timezone, what will run and when.
 6. Tuesday 9:00 the prompt goes into the conversation. When the turn comes back, the receipt is written. The log shows `created`, `armed`, `fired`, `completed`.
 

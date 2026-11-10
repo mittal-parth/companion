@@ -6,6 +6,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 import {
   defaultOpencodeModel,
@@ -32,6 +33,15 @@ test("installing the config writes the rules beside the model file", () => {
     expect(readFileSync(join(directory, "opencode", "AGENTS.md"), "utf8")).toBe(
       standingInstructions(),
     );
+    const skill = fileURLToPath(
+      new URL("../skills/schedules/SKILL.md", import.meta.url),
+    );
+    expect(
+      readFileSync(
+        join(directory, "opencode", "skills", "schedules", "SKILL.md"),
+        "utf8",
+      ),
+    ).toBe(readFileSync(skill, "utf8"));
     const key = process.env.SARVAM_API_KEY;
     if (key !== undefined && key.length >= 16) {
       expect(
