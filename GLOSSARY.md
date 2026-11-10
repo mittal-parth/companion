@@ -55,5 +55,5 @@ The user's allow-or-deny decision on a sensitive action the engine wants to take
 _Avoid_: permission
 
 **Schedule**:
-A rule that sends one prompt into a bot's conversation at later times. It is a calendar cron, an elapsed interval, or a single instant. The maths names each occurrence; the daemon fires it later.
+A rule that sends one prompt into a bot's conversation at later times. It is a calendar cron, an elapsed interval, or a single instant. The maths names each occurrence; the daemon fires it later. A schedule can be paused: while it is, nothing fires, no receipt is written, and the slots it misses are not caught up. The bot manages its own schedules by running the `schedule` command.
 _Avoid_: job, routine

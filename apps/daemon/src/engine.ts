@@ -4,8 +4,15 @@
  * After a restart, the stored session id is loaded instead of replaced.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
+import { delimiter, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { engines } from "@companion/shared";
@@ -37,6 +44,8 @@ AGENTS.md in your working directory is your instructions: who you are and what y
 Read both files at the start of a turn when they exist. The copies on disk are the latest. Use your file tools. Do not rely on an earlier reading.
 
 When the user tells you what you are for, or changes that, update AGENTS.md in your working directory. When they tell you something worth keeping, update MEMORY.md there. Skip a write when nothing new belongs in either file.
+
+When the user wants something to happen later or on a repeat, load the schedules skill and use the schedule command. Never keep a schedule in AGENTS.md or MEMORY.md.
 
 When a question needs a current public fact, search the web and cite the pages you used. Do not invent that fact.
 
@@ -125,6 +134,33 @@ export function installOpencodeConfig(configHome: string, model: string): void {
   mkdirSync(directory, { recursive: true });
   writeFileSync(join(directory, "opencode.json"), opencodeModelConfig(model));
   writeFileSync(join(directory, "AGENTS.md"), standingInstructions());
+  installSkills(directory);
+}
+
+/**
+ * Copies each skill folder into the config OpenCode reads.
+ * A skill is a directory under `skills/` with a SKILL.md. Adding one there is
+ * enough for the next daemon start to load it.
+ */
+function installSkills(configDirectory: string): void {
+  const source = fileURLToPath(new URL("../skills", import.meta.url));
+  const destination = join(configDirectory, "skills");
+  mkdirSync(destination, { recursive: true });
+  for (const name of readdirSync(source)) {
+    cpSync(join(source, name), join(destination, name), { recursive: true });
+  }
+}
+
+/**
+ * Puts the `schedule` command on the bot's PATH.
+ * The shim runs the CLI with this same Node, so the bot just types `schedule`.
+ */
+export function installScheduleShim(binDir: string): void {
+  mkdirSync(binDir, { recursive: true });
+  const cli = fileURLToPath(new URL("./schedule-cli.ts", import.meta.url));
+  const path = join(binDir, "schedule");
+  writeFileSync(path, `#!/bin/sh\nexec "${process.execPath}" "${cli}" "$@"\n`);
+  chmodSync(path, 0o755);
 }
 
 /** Speaks ACP for the daemon. One prompt is one turn of a bot's conversation. */
@@ -147,6 +183,8 @@ export async function startOpencodeEngine(options: {
   model: string;
   dataHome: string;
   configHome: string;
+  /** A directory prepended to PATH, holding the `schedule` command. */
+  binDir: string;
 }): Promise<Engine> {
   if (
     options.model.startsWith("sarvam/") &&
@@ -157,6 +195,7 @@ export async function startOpencodeEngine(options: {
   // Written before the process starts, so session/new already lists this model
   // and every bot is told to keep its own AGENTS.md and MEMORY.md.
   installOpencodeConfig(options.configHome, options.model);
+  installScheduleShim(options.binDir);
   mkdirSync(options.dataHome, { recursive: true });
 
   const env = { ...process.env };
@@ -165,10 +204,13 @@ export async function startOpencodeEngine(options: {
   delete env.OPENCODE_CONFIG_DIR;
   env.XDG_CONFIG_HOME = options.configHome;
   env.XDG_DATA_HOME = options.dataHome;
+  env.PATH = `${options.binDir}${delimiter}${env.PATH ?? ""}`;
 
   const child = spawn(
     options.bin,
-    ["acp", "--print-logs", "--log-level", "error"],
+    // OpenCode 1.19 prints its help and exits when these log flags are set,
+    // so the daemon relies on the process stderr alone.
+    ["acp"],
     {
       cwd: options.dataHome,
       env,

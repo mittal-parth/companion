@@ -8,7 +8,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type * as acp from "@agentclientprotocol/sdk";
-import { nextRun, type BotView } from "@companion/shared";
+import {
+  nextRun,
+  type BotView,
+  type ScheduleLogEntry,
+} from "@companion/shared";
 import { expect, test } from "vitest";
 import { startDaemon, type Daemon } from "./api.js";
 import type { Engine } from "./engine.js";
@@ -202,6 +206,153 @@ test("a removed schedule does not fire", async () => {
     expect(() => daemon?.receipts(schedule.id)).toThrow(
       `Unknown schedule ${schedule.id}.`,
     );
+  } finally {
+    await daemon?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a paused schedule does not fire and a missed slot is not caught up", async () => {
+  const prompts: string[] = [];
+  const entries: ScheduleLogEntry[] = [];
+  const directory = mkdtempSync(join(tmpdir(), "companion-schedule-"));
+  let daemon: Daemon | undefined;
+  try {
+    daemon = await startDaemon({
+      storePath: join(directory, "threads.db"),
+      engine: recording(prompts),
+      log: (entry) => entries.push(entry),
+    });
+    const bot = await createBot(daemon, "Ada");
+    const schedule = daemon.createSchedule({
+      botId: bot.id,
+      prompt: weather,
+      kind: "once",
+      at: Date.now() + 400,
+    });
+    daemon.pauseSchedule(schedule.id);
+    await delay(700);
+    daemon.resumeSchedule(schedule.id);
+    await delay(300);
+    expect(prompts.filter((prompt) => prompt === weather)).toEqual([]);
+    expect(daemon.receipts(schedule.id)).toEqual([]);
+    expect(entries.map((entry) => entry.event)).toEqual([
+      "created",
+      "armed",
+      "paused",
+      "resumed",
+    ]);
+  } finally {
+    await daemon?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a resumed schedule fires once at its next slot and logs the trace", async () => {
+  const prompts: string[] = [];
+  const entries: ScheduleLogEntry[] = [];
+  const directory = mkdtempSync(join(tmpdir(), "companion-schedule-"));
+  let daemon: Daemon | undefined;
+  try {
+    daemon = await startDaemon({
+      storePath: join(directory, "threads.db"),
+      engine: recording(prompts),
+      log: (entry) => entries.push(entry),
+    });
+    const bot = await createBot(daemon, "Ada");
+    const at = Date.now() + 1_000;
+    const schedule = daemon.createSchedule({
+      botId: bot.id,
+      prompt: weather,
+      kind: "once",
+      at,
+    });
+    daemon.pauseSchedule(schedule.id);
+    daemon.resumeSchedule(schedule.id);
+    await waitFor(() => daemon?.receipts(schedule.id).length === 1);
+    expect(prompts.filter((prompt) => prompt === weather)).toEqual([weather]);
+    expect(daemon.receipts(schedule.id)).toEqual([
+      { occurrence: at, outcome: "ran" },
+    ]);
+    expect(entries.map((entry) => entry.event)).toEqual([
+      "created",
+      "armed",
+      "paused",
+      "resumed",
+      "armed",
+      "fired",
+      "completed",
+    ]);
+    expect(entries.every((entry) => entry.scheduleId === schedule.id)).toBe(
+      true,
+    );
+    expect(entries.every((entry) => entry.botId === bot.id)).toBe(true);
+    expect(entries.at(-1)).toMatchObject({
+      event: "completed",
+      occurrence: at,
+      detail: "end_turn",
+    });
+  } finally {
+    await daemon?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a schedule stays paused after a restart", async () => {
+  const prompts: string[] = [];
+  const directory = mkdtempSync(join(tmpdir(), "companion-schedule-"));
+  const storePath = join(directory, "threads.db");
+  let daemon: Daemon | undefined;
+  try {
+    daemon = await startDaemon({ storePath, engine: recording(prompts) });
+    const bot = await createBot(daemon, "Ada");
+    const schedule = daemon.createSchedule({
+      botId: bot.id,
+      prompt: weather,
+      kind: "once",
+      at: Date.now() + 1_500,
+    });
+    daemon.pauseSchedule(schedule.id);
+    await daemon.close();
+
+    daemon = await startDaemon({ storePath, engine: recording(prompts) });
+    await delay(2_000);
+    expect(prompts.filter((prompt) => prompt === weather)).toEqual([]);
+    expect(daemon.receipts(schedule.id)).toEqual([]);
+  } finally {
+    await daemon?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed prompt is logged with its message", async () => {
+  const entries: ScheduleLogEntry[] = [];
+  const engine: Engine = {
+    async prompt(_botId, text) {
+      if (text === weather) throw new Error("OpenCode exploded.");
+      return "end_turn";
+    },
+    async close() {},
+  };
+  const directory = mkdtempSync(join(tmpdir(), "companion-schedule-"));
+  let daemon: Daemon | undefined;
+  try {
+    daemon = await startDaemon({
+      storePath: join(directory, "threads.db"),
+      engine,
+      log: (entry) => entries.push(entry),
+    });
+    const bot = await createBot(daemon, "Ada");
+    daemon.createSchedule({
+      botId: bot.id,
+      prompt: weather,
+      kind: "once",
+      at: Date.now() + 400,
+    });
+    await waitFor(() => entries.some((entry) => entry.event === "failed"));
+    expect(entries.find((entry) => entry.event === "failed")).toMatchObject({
+      detail: "OpenCode exploded.",
+    });
   } finally {
     await daemon?.close();
     rmSync(directory, { recursive: true, force: true });
