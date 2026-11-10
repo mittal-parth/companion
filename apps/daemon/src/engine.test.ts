@@ -18,6 +18,7 @@ test("the standing rules name each bot's instructions and memory", () => {
   expect(text).toContain("AGENTS.md");
   expect(text).toContain("MEMORY.md");
   expect(text).toContain("The copies on disk are the latest.");
+  expect(text).toContain("search the web and cite the pages");
   expect(text).not.toContain("SARVAM_API_KEY");
 });
 
@@ -27,8 +28,22 @@ test("installing the config writes the rules beside the model file", () => {
     installOpencodeConfig(directory, defaultOpencodeModel);
     const config = JSON.parse(
       readFileSync(join(directory, "opencode", "opencode.json"), "utf8"),
-    ) as { model: string };
+    ) as {
+      model: string;
+      websearch: { provider: string };
+      permissions: { action: string; resource: string; effect: string }[];
+      policies: { action: string; resource: string; effect: string }[];
+    };
     expect(config.model).toBe(defaultOpencodeModel);
+    expect(config.websearch).toEqual({ provider: "random" });
+    expect(config.permissions).toEqual([
+      { action: "websearch", resource: "*", effect: "allow" },
+    ]);
+    expect(config.policies).toEqual([
+      { action: "websearch.use", resource: "firecrawl", effect: "deny" },
+      { action: "websearch.use", resource: "tavily", effect: "deny" },
+      { action: "websearch.use", resource: "opencode", effect: "deny" },
+    ]);
     expect(readFileSync(join(directory, "opencode", "AGENTS.md"), "utf8")).toBe(
       standingInstructions(),
     );
