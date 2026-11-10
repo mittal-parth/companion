@@ -98,6 +98,51 @@ test.skipIf(!live)(
 );
 
 test.skipIf(!live)(
+  "a current question is answered from the free web search pool",
+  async () => {
+    if (!opencodeStarts()) {
+      throw new Error(`COMPANION_LIVE=1 but ${opencodeBin} did not start.`);
+    }
+    const directory = mkdtempSync(join(tmpdir(), "companion-live-search-"));
+    const daemon = await startDaemon({
+      storePath: join(directory, "threads.db"),
+      opencodeBin,
+    });
+    try {
+      const config = JSON.parse(
+        readFileSync(
+          join(directory, "opencode-config", "opencode", "opencode.json"),
+          "utf8",
+        ),
+      ) as { websearch: { provider: string } };
+      expect(config.websearch).toEqual({ provider: "random" });
+      const created = await fetch(`${daemon.url}/bots`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Scout" }),
+      });
+      expect(created.status).toBe(201);
+      const bot = (await created.json()) as BotView;
+      const updates = await liveTurn(
+        daemon.url,
+        bot.id,
+        "Search the web for the latest stable Bun release. Reply with the version and the page URL you used.",
+      );
+      const search = webSearchResult(updates);
+      expect(search.completed, JSON.stringify(updates)).toBe(true);
+      expect(search.failed, JSON.stringify(updates)).toBe(false);
+      const reply = replyText(updates);
+      expect(reply, JSON.stringify(updates)).toMatch(/https?:\/\//);
+      expect(reply, JSON.stringify(updates)).toMatch(/bun/i);
+    } finally {
+      await daemon.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+  480_000,
+);
+
+test.skipIf(!live)(
   "two bots keep separate files and context",
   async () => {
     if (!opencodeStarts()) {
@@ -201,6 +246,39 @@ async function transcript(url: string, botId: string): Promise<BotTranscript> {
   const response = await fetch(`${url}/bots/${botId}`);
   expect(response.status).toBe(200);
   return (await response.json()) as BotTranscript;
+}
+
+/**
+ * Whether a web search in this turn finished.
+ * OpenCode titles the call with the provider it picked, such as "Web Search via Exa".
+ */
+function webSearchResult(updates: readonly acp.SessionUpdate[]): {
+  completed: boolean;
+  failed: boolean;
+} {
+  const ids = new Set<string>();
+  let completed = false;
+  let failed = false;
+  for (const update of updates) {
+    if (
+      update.sessionUpdate !== "tool_call" &&
+      update.sessionUpdate !== "tool_call_update"
+    ) {
+      continue;
+    }
+    const named =
+      ("name" in update && update.name === "websearch") ||
+      ("title" in update &&
+        typeof update.title === "string" &&
+        /web search/i.test(update.title));
+    if (update.sessionUpdate === "tool_call" && named)
+      ids.add(update.toolCallId);
+    if (!named && !ids.has(update.toolCallId)) continue;
+    if (update.sessionUpdate === "tool_call") ids.add(update.toolCallId);
+    if (update.status === "completed") completed = true;
+    if (update.status === "failed") failed = true;
+  }
+  return { completed, failed };
 }
 
 /** One live turn, as the session updates the engine sent. */
