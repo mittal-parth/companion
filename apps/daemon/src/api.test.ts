@@ -2,11 +2,11 @@
  * Proves the local API creates a bot as one conversation and streams a turn.
  * The real OpenCode turn lives in api.live.test.ts.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
-import type { BotView, TurnEvent } from "@companion/shared";
+import type { BotView, ScheduleAccess, TurnEvent } from "@companion/shared";
 import { expect, test } from "vitest";
 import { startDaemon, openingPrompt, type Daemon } from "./api.js";
 import { defaultOpencodeModel } from "./engine.js";
@@ -319,6 +319,78 @@ test("two bots can take a turn at the same time", async () => {
     }
   });
 });
+
+test("a bot gets a schedule token before its opening turn", async () => {
+  const seen: string[] = [];
+  const engine: Engine = {
+    async prompt() {
+      seen.push("turn");
+      return "end_turn";
+    },
+    async close() {},
+  };
+  const directory = mkdtempSync(join(tmpdir(), "companion-api-"));
+  const storePath = join(directory, "threads.db");
+  let daemon = await startDaemon({ storePath, engine });
+  try {
+    const bot = await createBot(daemon, "Ada");
+    expect(seen).toEqual(["turn"]);
+    const first = readAccess(bot.directory);
+    expect(first.url).toBe(daemon.url);
+    expect(first.token).not.toBe("");
+    const denied = await fetch(`${daemon.url}/agent/schedules`);
+    expect(denied.status).toBe(401);
+    const forged = await fetch(`${daemon.url}/agent/schedules`, {
+      headers: { authorization: "Bearer nope" },
+    });
+    expect(forged.status).toBe(401);
+    const claimed = await fetch(`${daemon.url}/agent/schedules`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${first.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        botId: "someone-else",
+        id: "chosen-by-the-caller",
+        kind: "once",
+        prompt: "Check",
+        at: Date.now() + 3_600_000,
+      }),
+    });
+    expect(claimed.status).toBe(201);
+    const schedule = (await claimed.json()) as { id: string; botId: string };
+    expect(schedule.botId).toBe(bot.id);
+    expect(schedule.id).not.toBe("chosen-by-the-caller");
+    await daemon.close();
+
+    daemon = await startDaemon({ storePath, engine });
+    const next = readAccess(bot.directory);
+    expect(next.token).not.toBe(first.token);
+    expect(next.url).toBe(daemon.url);
+    const stale = await fetch(`${daemon.url}/agent/schedules`, {
+      headers: { authorization: `Bearer ${first.token}` },
+    });
+    expect(stale.status).toBe(401);
+    const fresh = await fetch(`${daemon.url}/agent/schedules`, {
+      headers: { authorization: `Bearer ${next.token}` },
+    });
+    expect(fresh.status).toBe(200);
+    const listed = (await fresh.json()) as Array<{ id: string }>;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.id).toBe(schedule.id);
+    writeFileSync(join(directory, ".keep"), "");
+  } finally {
+    await daemon.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+function readAccess(directory: string): ScheduleAccess {
+  return JSON.parse(
+    readFileSync(join(directory, ".companion", "schedule.json"), "utf8"),
+  ) as ScheduleAccess;
+}
 
 function scripted(
   turns: Array<{ updates: acp.SessionUpdate[]; stopReason: acp.StopReason }>,
