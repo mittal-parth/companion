@@ -20,6 +20,10 @@ _Avoid_: engine, model
 The weights a turn runs. More than one provider can serve the same model.
 _Avoid_: engine, provider, bot
 
+**Vision subagent**:
+A read-only child session that looks at an image file for a model that cannot see. The managed default uses Sarvam's GLM 5.3 Flash for this. A model that can already see does not have one.
+_Avoid_: browser, screenshot
+
 **Harness**:
 The model-and-tool loop inside an engine: one prompt, tool execution, permission checks, and the session updates that result.
 _Avoid_: daemon, bot

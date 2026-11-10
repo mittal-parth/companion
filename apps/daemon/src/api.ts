@@ -18,6 +18,7 @@ import {
   engineNames,
   engines,
   nextRun,
+  type AttachedImage,
   type Bot,
   type BotTranscript,
   type BotView,
@@ -31,6 +32,9 @@ import {
 } from "@companion/shared";
 import {
   defaultOpencodeModel,
+  delegatePastedImages,
+  imageBytes,
+  modelReadsImages,
   opencodeModelConfig,
   startOpencodeEngine,
   type Engine,
@@ -494,6 +498,7 @@ async function createBot(
         handler,
         bot.id,
         openingPrompt(name, description),
+        [],
         () => {},
       );
       break;
@@ -540,9 +545,10 @@ async function sendMessage(
 ): Promise<void> {
   const body = await readObject(req);
   const text = requiredString(body, "text", "A message needs text.");
+  const images = attachedImages(body.images);
   let started = false;
   try {
-    const stopReason = await runTurn(handler, botId, text, (update) => {
+    const stopReason = await runTurn(handler, botId, text, images, (update) => {
       if (!started) {
         started = true;
         res.writeHead(200, sseHeaders);
@@ -577,6 +583,7 @@ async function runTurn(
   handler: Handler,
   botId: string,
   text: string,
+  images: readonly AttachedImage[],
   onUpdate: (update: acp.SessionUpdate) => void,
 ): Promise<acp.StopReason> {
   const bot = handler.store.getBot(botId);
@@ -588,11 +595,21 @@ async function runTurn(
   }
   handler.busy.add(botId);
   const thread = botConversation(handler.store, botId);
+  // A text-only model is told where the file is. The bytes stay on disk.
+  const prompt = modelReadsImages(handler.model)
+    ? text
+    : delegatePastedImages(thread.cwd, text, images);
+  const seen = modelReadsImages(handler.model) ? images : [];
   try {
-    return await handler.engine.prompt(botId, text, (update) => {
-      handler.store.appendUpdate(thread.id, update);
-      onUpdate(update);
-    });
+    return await handler.engine.prompt(
+      botId,
+      prompt,
+      (update) => {
+        handler.store.appendUpdate(thread.id, update);
+        onUpdate(update);
+      },
+      seen,
+    );
   } finally {
     handler.release(botId);
   }
@@ -610,7 +627,7 @@ async function runTurnWhenFree(
   for (;;) {
     if (handler.stopping()) throw new Error("The daemon is stopping.");
     try {
-      return await runTurn(handler, botId, text, () => {
+      return await runTurn(handler, botId, text, [], () => {
         // The update is already stored. A schedule has no open response.
       });
     } catch (error) {
@@ -663,7 +680,8 @@ function httpStatus(error: unknown): { status: number; message: string } {
     message.startsWith("Unknown engine") ||
     message.startsWith("The request") ||
     message.startsWith("A message needs") ||
-    message.startsWith("A description must")
+    message.startsWith("A description must") ||
+    message.startsWith("An image")
   ) {
     return { status: 400, message };
   }
@@ -693,7 +711,7 @@ function readBody(req: IncomingMessage): Promise<string> {
     let size = 0;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > 1_000_000) {
+      if (size > 8_000_000) {
         rejectBody(new HttpError(400, "The request body is too large."));
         req.destroy();
         return;
@@ -719,6 +737,45 @@ function requiredString(
     throw new HttpError(400, message);
   }
   return value.trim();
+}
+
+/**
+ * Images on a message, if the caller sent any.
+ * Each one is checked here so a bad file is a 400 before a turn starts.
+ */
+function attachedImages(value: unknown): AttachedImage[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value))
+    throw new HttpError(400, "An image must be listed.");
+  return value.map((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      throw new HttpError(400, "An image must be an object.");
+    }
+    const mimeType = (item as { mimeType?: unknown }).mimeType;
+    const data = (item as { data?: unknown }).data;
+    if (typeof mimeType !== "string" || typeof data !== "string") {
+      throw new HttpError(400, "An image needs a type and base64 data.");
+    }
+    try {
+      imageBytes({ mimeType, data });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "An image is not valid.";
+      throw new HttpError(400, message);
+    }
+    if (
+      mimeType !== "image/png" &&
+      mimeType !== "image/jpeg" &&
+      mimeType !== "image/gif" &&
+      mimeType !== "image/webp"
+    ) {
+      throw new HttpError(
+        400,
+        "An image needs a png, jpeg, gif, or webp type.",
+      );
+    }
+    return { mimeType, data };
+  });
 }
 
 /** A description is optional. Blank text is the same as leaving it out. */
