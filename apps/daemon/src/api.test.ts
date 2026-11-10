@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
-import type { BotView, TurnEvent } from "@companion/shared";
+import type { BotTranscript, BotView, TurnEvent } from "@companion/shared";
 import { expect, test } from "vitest";
 import { startDaemon, openingPrompt, type Daemon } from "./api.js";
 import { defaultOpencodeModel } from "./engine.js";
@@ -60,7 +60,11 @@ test("creating a bot starts its one conversation", async () => {
       expect(await listed.json()).toEqual([bot]);
 
       const read = await fetch(`${daemon.url}/bots/${bot.id}`);
-      expect(await read.json()).toEqual({ ...bot, updates: [hello] });
+      expect(await read.json()).toEqual({
+        ...bot,
+        updates: [hello],
+        turn: { status: "finished", stopReason: "end_turn" },
+      });
     },
   );
 });
@@ -90,7 +94,10 @@ test("a message streams session updates and stores them", async () => {
       });
 
       const stored = await fetch(`${daemon.url}/bots/${bot.id}`);
-      expect(await stored.json()).toMatchObject({ updates: [hello, second] });
+      expect(await stored.json()).toMatchObject({
+        updates: [hello, second],
+        turn: { status: "finished", stopReason: "end_turn" },
+      });
     },
   );
 });
@@ -160,6 +167,8 @@ test("bad requests name what was wrong", async () => {
     });
     expect(claude.status).toBe(201);
     const claudeBot = (await claude.json()) as BotView;
+    const unread = await fetch(`${daemon.url}/bots/${claudeBot.id}`);
+    expect(await unread.json()).toMatchObject({ turn: { status: "idle" } });
     const refused = await postJson(daemon, `/bots/${claudeBot.id}/messages`, {
       text: "hello",
     });
@@ -208,7 +217,10 @@ test("an engine failure is reported on the response", async () => {
       { event: "error", data: { error: "OpenCode stopped." } },
     ]);
     const stored = await fetch(`${daemon.url}/bots/${bot.id}`);
-    expect(await stored.json()).toMatchObject({ updates: [hello] });
+    expect(await stored.json()).toMatchObject({
+      updates: [hello],
+      turn: { status: "failed", error: "OpenCode stopped." },
+    });
   });
 });
 
@@ -230,7 +242,75 @@ test("a failed opening turn is an error and the bot remains", async () => {
     const bot = listed[0];
     expect(bot).toBeDefined();
     const read = await fetch(`${daemon.url}/bots/${bot?.id}`);
-    expect(await read.json()).toMatchObject({ updates: [] });
+    expect(await read.json()).toMatchObject({
+      updates: [],
+      turn: { status: "failed", error: "OpenCode exploded." },
+    });
+  });
+});
+
+test("a turn keeps running after the client disconnects", async () => {
+  let release: () => void = () => {};
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let started: () => void = () => {};
+  const running = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const later: acp.SessionUpdate = {
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "still going" },
+  };
+  const engine: Engine = {
+    async prompt(_botId, text, onUpdate) {
+      if (text.startsWith("Your name is")) {
+        onUpdate(hello);
+        return "end_turn";
+      }
+      onUpdate(hello);
+      started();
+      await hold;
+      onUpdate(later);
+      return "end_turn";
+    },
+    async close() {},
+  };
+  let pending: Promise<Response> | undefined;
+  const controller = new AbortController();
+  await withDaemon(engine, async (daemon) => {
+    try {
+      const bot = await createBot(daemon, "Content");
+      pending = fetch(`${daemon.url}/bots/${bot.id}/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: "keep going" }),
+        signal: controller.signal,
+      });
+      await running;
+      controller.abort();
+      await pending.catch(() => undefined);
+      const during = (await (
+        await fetch(`${daemon.url}/bots/${bot.id}`)
+      ).json()) as BotTranscript;
+      expect(during.turn).toEqual({ status: "running" });
+      expect(during.updates).toEqual([hello, hello]);
+      const refused = await postJson(daemon, `/bots/${bot.id}/messages`, {
+        text: "second",
+      });
+      expect(refused.status).toBe(409);
+      release();
+      const after = await waitForTurn(daemon, bot.id, "finished");
+      expect(after.updates).toEqual([hello, hello, later]);
+      expect(after.turn).toEqual({
+        status: "finished",
+        stopReason: "end_turn",
+      });
+    } finally {
+      release();
+      controller.abort();
+      await pending?.catch(() => undefined);
+    }
   });
 });
 
@@ -351,6 +431,22 @@ async function withDaemon(
     await daemon.close();
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+async function waitForTurn(
+  daemon: Daemon,
+  botId: string,
+  status: BotTranscript["turn"]["status"],
+): Promise<BotTranscript> {
+  const deadline = Date.now() + 2_000;
+  let last: BotTranscript | undefined;
+  while (Date.now() < deadline) {
+    const response = await fetch(`${daemon.url}/bots/${botId}`);
+    last = (await response.json()) as BotTranscript;
+    if (last.turn.status === status) return last;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Turn stayed ${last?.turn.status ?? "unread"}.`);
 }
 
 async function createBot(

@@ -1,9 +1,11 @@
 /**
  * Local API for one user's bots.
  * A bot is one long-lived conversation: create it, and OpenCode takes the
- * first turn. Later messages stream as server-sent events. The model keeps
- * that bot's instructions and memory in its folder. A schedule sends its
- * prompt into that same conversation.
+ * first turn. Later messages stream as server-sent events while that client
+ * stays connected. Closing the connection does not stop the turn. The stored
+ * updates and the turn's state stay on the daemon for whatever client comes
+ * back. The model keeps that bot's instructions and memory in its folder.
+ * A schedule sends its prompt into that same conversation.
  */
 import {
   createServer,
@@ -23,6 +25,7 @@ import {
   type Schedule,
   type ScheduleReceipt,
   type TurnEvent,
+  type TurnState,
 } from "@companion/shared";
 import {
   defaultOpencodeModel,
@@ -90,6 +93,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   }
 
   const busy = new Set<string>();
+  const turns = new Map<string, TurnState>();
   const idleWaiters = new Map<string, Array<() => void>>();
   let stopping = false;
 
@@ -123,6 +127,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     engine,
     model,
     busy,
+    turns,
     whenIdle,
     release,
     stopping: () => stopping,
@@ -203,6 +208,7 @@ type Handler = {
   engine: Engine;
   model: string;
   busy: Set<string>;
+  turns: Map<string, TurnState>;
   whenIdle(botId: string): Promise<void>;
   release(botId: string): void;
   stopping(): boolean;
@@ -248,7 +254,7 @@ async function handle(
       sendJson(res, 405, { error: "Use GET." });
       return;
     }
-    sendJson(res, 200, transcript(handler.store, botId));
+    sendJson(res, 200, transcript(handler, botId));
     return;
   }
   if (parts.length === 3 && parts[2] === "messages") {
@@ -333,17 +339,20 @@ function view(store: ThreadStore, bot: Bot): BotView {
   };
 }
 
-function transcript(store: ThreadStore, botId: string): BotTranscript {
-  const bot = store.getBot(botId);
-  const thread = botConversation(store, botId);
+function transcript(handler: Handler, botId: string): BotTranscript {
+  const bot = handler.store.getBot(botId);
+  const thread = botConversation(handler.store, botId);
   return {
-    ...view(store, bot),
-    updates: store.getThread(thread.id).updates,
+    ...view(handler.store, bot),
+    updates: handler.store.getThread(thread.id).updates,
+    turn: handler.turns.get(botId) ?? { status: "idle" },
   };
 }
 
 /**
- * Streams one turn. A second message for the same bot is refused until this
+ * Streams one turn while the client stays connected.
+ * If that connection closes, the turn keeps running. Its outcome is stored
+ * for a later read. A second message for the same bot is refused until this
  * one finishes, so its session updates stay in order.
  */
 async function sendMessage(
@@ -355,37 +364,51 @@ async function sendMessage(
   const body = await readObject(req);
   const text = requiredString(body, "text", "A message needs text.");
   let started = false;
-  try {
-    const stopReason = await runTurn(handler, botId, text, (update) => {
+  let detached = false;
+  const detach = () => {
+    detached = true;
+  };
+  // A dropped socket is the client leaving. It is not a failed turn.
+  req.on("error", detach);
+  res.on("error", detach);
+  res.on("close", () => {
+    if (!res.writableFinished) detach();
+  });
+  const send = (event: TurnEvent) => {
+    if (detached) return;
+    try {
       if (!started) {
         started = true;
         res.writeHead(200, sseHeaders);
       }
-      writeEvent(res, { event: "update", data: update });
-    });
-    if (!started) {
-      started = true;
-      res.writeHead(200, sseHeaders);
+      writeEvent(res, event);
+    } catch {
+      detach();
     }
-    writeEvent(res, { event: "done", data: { stopReason } });
-    res.end();
+  };
+  try {
+    const stopReason = await runTurn(handler, botId, text, (update) => {
+      send({ event: "update", data: update });
+    });
+    send({ event: "done", data: { stopReason } });
+    endStream(res);
   } catch (error) {
+    if (detached) return;
     const message = httpStatus(error).message;
     if (!started) {
       sendJson(res, httpStatus(error).status, { error: message });
       return;
     }
-    if (!res.writableEnded) {
-      writeEvent(res, { event: "error", data: { error: message } });
-      res.end();
-    }
+    send({ event: "error", data: { error: message } });
+    endStream(res);
   }
 }
 
 /**
  * Runs one turn and stores each update before the caller sees it.
- * The busy set is taken before any wait, so two turns of one bot cannot overlap
- * and two bots can.
+ * Records the turn as running, then finished or failed, so a later read can
+ * say what happened after the client has gone. The busy set is taken before
+ * any wait, so two turns of one bot cannot overlap and two bots can.
  */
 async function runTurn(
   handler: Handler,
@@ -401,12 +424,21 @@ async function runTurn(
     throw new HttpError(409, "This bot is already working on a turn.");
   }
   handler.busy.add(botId);
+  handler.turns.set(botId, { status: "running" });
   const thread = botConversation(handler.store, botId);
   try {
-    return await handler.engine.prompt(botId, text, (update) => {
+    const stopReason = await handler.engine.prompt(botId, text, (update) => {
       handler.store.appendUpdate(thread.id, update);
       onUpdate(update);
     });
+    handler.turns.set(botId, { status: "finished", stopReason });
+    return stopReason;
+  } catch (error) {
+    handler.turns.set(botId, {
+      status: "failed",
+      error: httpStatus(error).message,
+    });
+    throw error;
   } finally {
     handler.release(botId);
   }
@@ -444,8 +476,18 @@ const sseHeaders = {
 };
 
 function writeEvent(res: ServerResponse, event: TurnEvent): void {
-  if (res.destroyed || res.writableEnded) return;
+  if (res.destroyed || res.writableEnded || !res.writable) return;
   res.write(`event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`);
+}
+
+/** Ends the stream. A client that has already gone is left alone. */
+function endStream(res: ServerResponse): void {
+  if (res.destroyed || res.writableEnded) return;
+  try {
+    res.end();
+  } catch {
+    // The client closed the connection. The turn has already been recorded.
+  }
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

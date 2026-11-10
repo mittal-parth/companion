@@ -40,9 +40,22 @@ export type BotView = Bot & {
   directory: string;
 };
 
-/** A bot together with the session updates stored for its conversation. */
+/**
+ * The latest turn for a bot, as a client reads it back.
+ * `idle` means none has run. `running` means the daemon is still in one,
+ * whether or not a client is connected. `finished` and `failed` keep the
+ * outcome after the stream has closed.
+ */
+export type TurnState =
+  | { status: "idle" }
+  | { status: "running" }
+  | { status: "finished"; stopReason: acp.StopReason }
+  | { status: "failed"; error: string };
+
+/** A bot, its stored session updates, and the state of its latest turn. */
 export type BotTranscript = BotView & {
   updates: acp.SessionUpdate[];
+  turn: TurnState;
 };
 
 /**
