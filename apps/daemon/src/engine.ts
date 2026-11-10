@@ -82,6 +82,18 @@ export function opencodeModelConfig(model: string): string {
                 output: 8192,
               },
             },
+            "sarvam-105b": {
+              name: "Sarvam 105B",
+              capabilities: {
+                tools: true,
+                input: ["text"],
+                output: ["text"],
+              },
+              limit: {
+                context: 128000,
+                output: 8192,
+              },
+            },
           },
         },
       },
@@ -105,10 +117,9 @@ export function installOpencodeConfig(configHome: string, model: string): void {
   mkdirSync(directory, { recursive: true });
   writeFileSync(join(directory, "opencode.json"), opencodeModelConfig(model));
   writeFileSync(join(directory, "AGENTS.md"), standingInstructions());
-  writeFileSync(
-    join(directory, "skills", "schedules", "SKILL.md"),
-    scheduleSkill(),
-  );
+  const skill = join(directory, "skills", "schedules");
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, "SKILL.md"), scheduleSkill());
 }
 
 /**
@@ -215,7 +226,9 @@ export async function startOpencodeEngine(options: {
 
   const child = spawn(
     options.bin,
-    ["acp", "--print-logs", "--log-level", "error"],
+    // OpenCode 1.19 prints its help and exits when these log flags are set,
+    // so the daemon relies on the process stderr alone.
+    ["acp"],
     {
       cwd: options.dataHome,
       env,

@@ -56,34 +56,37 @@ test("create reads a cron, an interval and a one-time schedule", () => {
       timezone: "Asia/Kolkata",
     },
   });
-  expect(
-    parseScheduleArgs(["create", "--prompt=Ping", "--every=2h"], now).body,
-  ).toMatchObject({
+  const interval = parseScheduleArgs(
+    ["create", "--prompt=Ping", "--every=2h"],
+    now,
+  );
+  if (interval.command !== "create") throw new Error("expected create");
+  expect(interval.body).toMatchObject({
     kind: "interval",
     everyMinutes: 120,
     anchorAt: now,
     timezone: "UTC",
   });
-  expect(
-    parseScheduleArgs(
-      [
-        "create",
-        "--prompt",
-        "Ping",
-        "--every",
-        "1d",
-        "--tz",
-        "Asia/Kolkata",
-        "--weekdays",
-        "Mon,fri,0",
-        "--window",
-        "09:00-17:00",
-        "--until",
-        "2026-12-31T00:00:00+05:30",
-      ],
-      now,
-    ).body,
-  ).toEqual({
+  const limited = parseScheduleArgs(
+    [
+      "create",
+      "--prompt",
+      "Ping",
+      "--every",
+      "1d",
+      "--tz",
+      "Asia/Kolkata",
+      "--weekdays",
+      "Mon,fri,0",
+      "--window",
+      "09:00-17:00",
+      "--until",
+      "2026-12-31T00:00:00+05:30",
+    ],
+    now,
+  );
+  if (limited.command !== "create") throw new Error("expected create");
+  expect(limited.body).toEqual({
     kind: "interval",
     prompt: "Ping",
     everyMinutes: 1440,
@@ -93,22 +96,22 @@ test("create reads a cron, an interval and a one-time schedule", () => {
     window: { start: "09:00", end: "17:00" },
     endsAt: Date.parse("2026-12-31T00:00:00+05:30"),
   });
-  expect(
-    parseScheduleArgs(
-      ["create", "--prompt", "Once", "--at", "2026-11-12T09:00:00+05:30"],
-      now,
-    ).body,
-  ).toEqual({
+  const once = parseScheduleArgs(
+    ["create", "--prompt", "Once", "--at", "2026-11-12T09:00:00+05:30"],
+    now,
+  );
+  if (once.command !== "create") throw new Error("expected create");
+  expect(once.body).toEqual({
     kind: "once",
     prompt: "Once",
     at: Date.parse("2026-11-12T09:00:00+05:30"),
   });
-  expect(
-    parseScheduleArgs(
-      ["create", "--prompt", "Once", "--at", "2026-11-12T09:00:00Z"],
-      now,
-    ).body,
-  ).toMatchObject({
+  const utc = parseScheduleArgs(
+    ["create", "--prompt", "Once", "--at", "2026-11-12T09:00:00Z"],
+    now,
+  );
+  if (utc.command !== "create") throw new Error("expected create");
+  expect(utc.body).toMatchObject({
     at: Date.parse("2026-11-12T09:00:00Z"),
   });
 });
@@ -438,14 +441,16 @@ type CliResult = {
 };
 
 async function cliRun(cwd: string, args: string[]): Promise<CliResult> {
-  const result = await run(process.execPath, [cli, ...args], { cwd }).catch(
-    (error: { code?: number; stdout?: string }) => error,
-  );
-  const stdout = result.stdout ?? "";
-  return {
-    code: result.code ?? 0,
-    json: JSON.parse(stdout) as CliResult["json"],
-  };
+  try {
+    const result = await run(process.execPath, [cli, ...args], { cwd });
+    return { code: 0, json: JSON.parse(result.stdout) as CliResult["json"] };
+  } catch (error) {
+    const failed = error as { code?: number; stdout?: string };
+    return {
+      code: failed.code ?? 1,
+      json: JSON.parse(failed.stdout ?? "{}") as CliResult["json"],
+    };
+  }
 }
 
 async function cliJson(
