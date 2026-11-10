@@ -175,6 +175,38 @@ test("a schedule and its finished occurrences survive a restart", () => {
   });
 });
 
+test("a schedule starts unpaused and a pause survives a restart", () => {
+  withDirectory((directory) => {
+    const path = join(directory, "threads.db");
+    const store = openThreadStore(path);
+    const bot = store.createBot({ name: "Ada", engine: "opencode" });
+    const schedule = {
+      id: "weather",
+      botId: bot.id,
+      prompt: "Check the weather",
+      kind: "once" as const,
+      at: 1_700_000_000_000,
+    };
+    store.saveSchedule(schedule);
+    expect(store.isSchedulePaused(schedule.id)).toBe(false);
+    store.setSchedulePaused(schedule.id, true);
+    store.close();
+
+    const restored = openThreadStore(path);
+    expect(restored.isSchedulePaused(schedule.id)).toBe(true);
+    expect(restored.getSchedule(schedule.id)).toEqual(schedule);
+    restored.setSchedulePaused(schedule.id, false);
+    expect(restored.isSchedulePaused(schedule.id)).toBe(false);
+    expect(() => restored.setSchedulePaused("missing", true)).toThrow(
+      "Unknown schedule missing.",
+    );
+    expect(() => restored.isSchedulePaused("missing")).toThrow(
+      "Unknown schedule missing.",
+    );
+    restored.close();
+  });
+});
+
 test("an older thread database gains schedules on open", () => {
   withDirectory((directory) => {
     const path = join(directory, "threads.db");

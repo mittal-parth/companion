@@ -3,6 +3,7 @@
  * Session update fields match what OpenCode sent, stored in the hello fixture.
  */
 import type * as acp from "@agentclientprotocol/sdk";
+import type { Schedule } from "./schedule.js";
 
 export const sharedPackage = "@companion/shared" as const;
 
@@ -111,6 +112,53 @@ export type RecordedSession = {
     _meta?: Record<string, unknown>;
   };
 };
+
+/** A schedule as the agent API shows it. Times are ISO-8601 UTC strings. */
+export type ScheduleListing = Schedule & {
+  paused: boolean;
+  /** The next slot, or null when the schedule is paused or has no slot left. */
+  nextRunAt: string | null;
+  /** The latest slot whose turn came back, or null if none has. */
+  lastRunAt: string | null;
+};
+
+/** What the `schedule` CLI reads from `<bot folder>/.companion/schedule.json`. */
+export type ScheduleAccess = {
+  url: string;
+  token: string;
+};
+
+/** One line of the schedule log, so a firing can be traced afterwards. */
+export type ScheduleLogEntry = {
+  event:
+    | "created"
+    | "deleted"
+    | "paused"
+    | "resumed"
+    | "armed"
+    | "fired"
+    | "completed"
+    | "failed"
+    | "skipped_paused"
+    | "skipped_duplicate";
+  scheduleId: string;
+  botId: string;
+  /** When the line was logged, in epoch milliseconds. */
+  at: number;
+  /** The slot the line is about, in epoch milliseconds. */
+  occurrence?: number;
+  /** The stop reason or the error message. */
+  detail?: string;
+};
+
+/** A `schedule` CLI command once its arguments have been read. */
+export type ScheduleCommand =
+  | { command: "create"; body: Record<string, unknown> }
+  | { command: "list" }
+  | { command: "pause"; id: string }
+  | { command: "resume"; id: string }
+  | { command: "delete"; id: string }
+  | { command: "help" };
 
 export {
   nextRun,

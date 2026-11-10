@@ -51,7 +51,8 @@ const schema = `
   CREATE TABLE IF NOT EXISTS schedules (
     id TEXT PRIMARY KEY,
     bot_id TEXT NOT NULL REFERENCES bots(id),
-    body TEXT NOT NULL
+    body TEXT NOT NULL,
+    paused INTEGER NOT NULL DEFAULT 0
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS schedule_receipts (
@@ -93,6 +94,10 @@ export type ThreadStore = {
   listSchedules(botId?: string): Schedule[];
   /** Removes a schedule and the receipts for its finished turns. */
   deleteSchedule(id: string): void;
+  /** Turns a schedule off or on. A paused schedule stays stored but never fires. */
+  setSchedulePaused(id: string, paused: boolean): void;
+  /** Whether a stored schedule is paused. */
+  isSchedulePaused(id: string): boolean;
   /**
    * Records that the turn for this occurrence came back.
    * A crash or a thrown prompt leaves no row, so a later catch-up can retry it.
@@ -219,6 +224,10 @@ function store(db: DatabaseSync): ThreadStore {
     "SELECT id, bot_id, body FROM schedules WHERE bot_id = ? ORDER BY rowid",
   );
   const deleteScheduleRow = db.prepare("DELETE FROM schedules WHERE id = ?");
+  const updatePaused = db.prepare(
+    "UPDATE schedules SET paused = ? WHERE id = ?",
+  );
+  const selectPaused = db.prepare("SELECT paused FROM schedules WHERE id = ?");
   const insertReceipt = db.prepare(
     `INSERT OR IGNORE INTO schedule_receipts (schedule_id, occurrence)
      VALUES (?, ?)`,
@@ -358,6 +367,17 @@ function store(db: DatabaseSync): ThreadStore {
       if (!changed(result.changes)) {
         throw new Error(`Unknown schedule ${id}.`);
       }
+    },
+
+    setSchedulePaused(id, paused) {
+      requireSchedule(id);
+      updatePaused.run(paused ? 1 : 0, id);
+    },
+
+    isSchedulePaused(id) {
+      requireSchedule(id);
+      const row = selectPaused.get(id);
+      return row !== undefined && row.paused !== 0;
     },
 
     recordReceipt(scheduleId, occurrence) {
