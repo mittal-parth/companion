@@ -1,14 +1,39 @@
 # Phase 2.4
 
-The daemon stores a schedule and sends its prompt into that bot's one conversation when the slot arrives. The schedule maths names the slot. Croner only waits for that instant. A cron, an interval, and a one-time schedule all wait the same way.
+The daemon stores a schedule and sends its prompt into that bot's conversation when a slot arrives. SQLite remembers the rule and the finished slots. Croner only waits. The map holds that wait so it can be stopped or replaced.
 
-A schedule is created on the running daemon. There is no HTTP route yet. The later tool and the UI call this same function. An id is filled in when the caller leaves it out. The bot must already exist.
+```mermaid
+flowchart LR
+  schedules["schedules row: the rule"]
+  receipts["schedule_receipts: finished slots"]
+  maths["next slot"]
+  croner["Croner: wait until that instant"]
+  map["map: handle for that wait"]
+  bot["bot conversation"]
 
-The prompt is what the engine receives. The transcript stores the engine's updates, the same way a person's message does. Nothing is written to say that a schedule started.
+  schedules --> maths
+  receipts --> maths
+  maths --> croner
+  croner --> map
+  croner -->|"time arrives"| bot
+  bot -->|"turn came back"| receipts
+```
 
-The receipt is the occurrence whose turn came back. Every stop reason counts, including a denial, a token limit, a refusal, and a normal answer. A thrown prompt writes no receipt. A crash writes no receipt either. Task 2.5 is the restart that sends an unfinished slot once when the miss is still inside its window. While this process stays up, a throw is not tried again.
+SQLite never talks to Croner. The daemon reads the row and creates the timer.
 
-A schedule that comes due during a turn waits, then sends that same prompt. Slots that pass during the wait are left unfinished for task 2.5. The next wait is the next slot that is still in the future.
+Monday 8:00pm, "every day at 9:00, check the weather," in `Asia/Kolkata`:
+
+- `create` writes one `schedules` row: the bot, the prompt, and `0 9 * * *`. There are no receipts yet.
+- The maths names the next slot, Tuesday 9:00:00. `new Cron` waits for that instant. The map stores that wait under the schedule id.
+- Tuesday 9:00:00 Croner calls the daemon. The prompt goes to the bot. The transcript keeps the engine's reply. Nothing is written to say a schedule started.
+- When the turn comes back, one `schedule_receipts` row is inserted for Tuesday 9:00:00. Every stop reason counts: a normal answer, a denial, a token limit, or a refusal. The map replaces Tuesday's wait with Wednesday 9:00:00.
+- The process dies Monday night. The map and the Croner wait die. The row is still there. Startup reads it, computes Tuesday 9:00:00 again, and arms a new wait.
+- The process dies Tuesday at 9:05, during the send. No receipt was written. Startup's next slot is Wednesday 9:00:00. Tuesday stays unfinished. Task 2.5 sends that missed slot once if it is still inside the window. While this process stays up, a throw is not tried again.
+- A schedule that comes due during a turn waits, then sends that same prompt. Slots that pass during the wait stay unfinished for catch-up.
+
+The next slot is not a column on `schedules`. It is computed from the rule plus the latest receipt. A boolean cannot stand in for receipts: Tuesday being done is not Wednesday being done. The map is not a second copy of the jobs. It is how this process points at the wait Croner created.
+
+A schedule is created on the running daemon. There is no HTTP route yet. `createSchedule`, `listSchedules`, `deleteSchedule`, and `receipts` are what the later tool and UI call. An id is filled in when the caller leaves it out. The bot must already exist. A cron, an interval, and a one-time schedule all wait the same way.
 
 Two behaviors are deferred:
 
