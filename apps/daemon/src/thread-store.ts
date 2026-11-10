@@ -164,6 +164,10 @@ export function openThreadStore(path: string): ThreadStore {
   return store(db);
 }
 
+/**
+ * Creates the tables and stamps the file.
+ * Nothing has shipped, so an older file is not altered. A newer file is refused.
+ */
 function migrate(db: DatabaseSync): void {
   const version = readVersion(db);
   if (version > schemaVersion) {
@@ -171,42 +175,8 @@ function migrate(db: DatabaseSync): void {
   }
   db.exec(schema);
   if (version < schemaVersion) {
-    // A database from the scheduler runtime has the tables and not these columns.
-    addColumnIfMissing(
-      db,
-      "schedules",
-      "created_at",
-      "INTEGER NOT NULL DEFAULT 0",
-    );
-    db.prepare("UPDATE schedules SET created_at = ? WHERE created_at = 0").run(
-      Date.now(),
-    );
-    addColumnIfMissing(
-      db,
-      "schedule_receipts",
-      "outcome",
-      "TEXT NOT NULL DEFAULT 'ran'",
-    );
     db.exec(`PRAGMA user_version = ${schemaVersion}`);
   }
-}
-
-/**
- * Adds a column when an older file already has the table.
- * A new file creates the column with the table, so this leaves it alone.
- */
-function addColumnIfMissing(
-  db: DatabaseSync,
-  table: "schedules" | "schedule_receipts",
-  column: string,
-  definition: string,
-): void {
-  const rows = db.prepare(`PRAGMA table_info(${table})`).all();
-  for (const row of rows) {
-    if (row.name === column) return;
-  }
-  if (rows.length === 0) return;
-  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function readVersion(db: DatabaseSync): number {

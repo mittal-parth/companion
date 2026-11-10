@@ -36,6 +36,8 @@ A receipt is the note for one slot. `ran` means the turn came back. `skipped` me
 
 Saving a schedule arms the next future slot. Slots from before it was saved are not catch-up. Turning a schedule off without deleting it comes with the schedule CLI.
 
+Nothing has shipped, so an older thread file is not upgraded. The tables are created in their current shape. A file written by a newer daemon is refused.
+
 The check uses the real clock and a scripted engine. A missed slot is stored already in the past, or it is a real minute that passes while a person is mid-turn.
 
 ```bash
