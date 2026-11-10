@@ -10,17 +10,21 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   engineNames,
   engines,
+  nextRun,
   type Bot,
   type BotTranscript,
   type BotView,
   type EngineName,
   type Schedule,
+  type ScheduleAccess,
+  type ScheduleListing,
   type ScheduleLogEntry,
   type TurnEvent,
 } from "@companion/shared";
@@ -30,7 +34,7 @@ import {
   startOpencodeEngine,
   type Engine,
 } from "./engine.js";
-import { startScheduler } from "./scheduler.js";
+import { startScheduler, type Scheduler } from "./scheduler.js";
 import {
   botConversation,
   openThreadStore,
@@ -98,6 +102,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   const busy = new Set<string>();
   const idleWaiters = new Map<string, Array<() => void>>();
   let stopping = false;
+  const schedulerHolder: { current?: Scheduler } = {};
 
   function whenIdle(botId: string): Promise<void> {
     if (stopping || !busy.has(botId)) return Promise.resolve();
@@ -132,6 +137,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     whenIdle,
     release,
     stopping: () => stopping,
+    access: { url: "", tokens: new Map() },
+    scheduler: () => {
+      if (schedulerHolder.current === undefined) {
+        throw new Error("The daemon is starting.");
+      }
+      return schedulerHolder.current;
+    },
   };
   const server = createServer((req, res) => {
     void handle(req, res, handler).catch((error: unknown) => {
@@ -163,27 +175,34 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     throw new Error("The daemon did not bind a local port.");
   }
 
-  const scheduler = startScheduler({
+  const url = `http://127.0.0.1:${address.port}`;
+  handler.access.url = url;
+  // Every bot, old or new, gets the address and token its CLI needs.
+  for (const bot of store.listBots()) {
+    grantScheduleAccess(handler, bot.id);
+  }
+  const started = startScheduler({
     store,
     send: (botId, text) => runTurnWhenFree(handler, botId, text),
     log: options.log ?? logToStderr,
   });
+  schedulerHolder.current = started;
 
   let closed = false;
   return {
-    url: `http://127.0.0.1:${address.port}`,
+    url,
     port: address.port,
-    createSchedule: (input) => scheduler.create(input),
-    listSchedules: (botId) => scheduler.list(botId),
-    deleteSchedule: (id) => scheduler.delete(id),
-    pauseSchedule: (id) => scheduler.pause(id),
-    resumeSchedule: (id) => scheduler.resume(id),
-    receipts: (scheduleId) => scheduler.receipts(scheduleId),
+    createSchedule: (input) => started.create(input),
+    listSchedules: (botId) => started.list(botId),
+    deleteSchedule: (id) => started.delete(id),
+    pauseSchedule: (id) => started.pause(id),
+    resumeSchedule: (id) => started.resume(id),
+    receipts: (scheduleId) => started.receipts(scheduleId),
     async close() {
       if (closed) return;
       closed = true;
       stopTurns();
-      scheduler.stop();
+      started.stop();
       server.closeAllConnections();
       await new Promise<void>((resolveClose, rejectClose) => {
         server.close((error) => {
@@ -220,6 +239,10 @@ type Handler = {
   whenIdle(botId: string): Promise<void>;
   release(botId: string): void;
   stopping(): boolean;
+  /** Where the schedule CLI finds the daemon, and which token belongs to which bot. */
+  access: { url: string; tokens: Map<string, string> };
+  /** The scheduler, available once the daemon is listening. */
+  scheduler(): Scheduler;
 };
 
 async function handle(
@@ -229,6 +252,10 @@ async function handle(
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const parts = url.pathname.split("/").filter((part) => part !== "");
+  if (parts[0] === "agent" && parts[1] === "schedules") {
+    await handleAgentSchedules(req, res, handler, parts.slice(2));
+    return;
+  }
   if (parts[0] !== "bots") {
     sendJson(res, 404, { error: "Unknown route." });
     return;
@@ -277,6 +304,148 @@ async function handle(
 }
 
 /**
+ * Lets a bot's `schedule` CLI reach the daemon as that bot.
+ * The address and a secret token go into a file in the bot's folder, which is
+ * where the CLI looks. The daemon remembers which bot owns the token, so the
+ * CLI never says who it is. A restart issues new tokens and rewrites the files.
+ */
+function grantScheduleAccess(handler: Handler, botId: string): void {
+  let token = [...handler.access.tokens].find(
+    ([, owner]) => owner === botId,
+  )?.[0];
+  if (token === undefined) {
+    token = randomBytes(24).toString("hex");
+    handler.access.tokens.set(token, botId);
+  }
+  const folder = join(botConversation(handler.store, botId).cwd, ".companion");
+  mkdirSync(folder, { recursive: true });
+  const access: ScheduleAccess = { url: handler.access.url, token };
+  writeFileSync(
+    join(folder, "schedule.json"),
+    `${JSON.stringify(access, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+}
+
+/**
+ * The routes behind the `schedule` CLI: list, create, pause, resume, delete.
+ * The bot is the one the bearer token belongs to. A schedule that is missing
+ * and one that belongs to another bot look the same, so ids do not leak.
+ */
+async function handleAgentSchedules(
+  req: IncomingMessage,
+  res: ServerResponse,
+  handler: Handler,
+  rest: string[],
+): Promise<void> {
+  const header = req.headers.authorization ?? "";
+  const botId = header.startsWith("Bearer ")
+    ? handler.access.tokens.get(header.slice("Bearer ".length).trim())
+    : undefined;
+  if (botId === undefined) {
+    sendJson(res, 401, { error: "Unknown or missing schedule token." });
+    return;
+  }
+  const scheduler = handler.scheduler();
+
+  if (rest.length === 0) {
+    if (req.method === "GET") {
+      sendJson(
+        res,
+        200,
+        scheduler.list(botId).map((schedule) => listing(handler, schedule)),
+      );
+      return;
+    }
+    if (req.method === "POST") {
+      const body = await readObject(req);
+      // The bot and the id are the daemon's to choose, whatever the body says.
+      const input: Record<string, unknown> = {
+        ...body,
+        botId,
+        id: randomUUID(),
+      };
+      if (input.kind === "interval" && input.anchorAt === undefined) {
+        input.anchorAt = Date.now();
+      }
+      if (
+        input.kind === "once" &&
+        typeof input.at === "number" &&
+        input.at <= Date.now()
+      ) {
+        throw new HttpError(400, "A one-time schedule must be in the future.");
+      }
+      let schedule: Schedule;
+      try {
+        schedule = scheduler.create(input);
+      } catch (error) {
+        throw new HttpError(
+          400,
+          error instanceof Error ? error.message : "The schedule is invalid.",
+        );
+      }
+      sendJson(res, 201, listing(handler, schedule));
+      return;
+    }
+    sendJson(res, 405, { error: "Use GET or POST." });
+    return;
+  }
+
+  const id = decodeId(rest[0]);
+  const schedule = ownedSchedule(handler, botId, id);
+  if (rest.length === 1) {
+    if (req.method !== "DELETE") {
+      sendJson(res, 405, { error: "Use DELETE." });
+      return;
+    }
+    scheduler.delete(schedule.id);
+    sendJson(res, 200, { deleted: schedule.id });
+    return;
+  }
+  const action = rest[1];
+  if (rest.length === 2 && (action === "pause" || action === "resume")) {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { error: "Use POST." });
+      return;
+    }
+    if (action === "pause") scheduler.pause(schedule.id);
+    else scheduler.resume(schedule.id);
+    sendJson(res, 200, listing(handler, schedule));
+    return;
+  }
+  sendJson(res, 404, { error: "Unknown route." });
+}
+
+function decodeId(raw: string | undefined): string {
+  try {
+    return decodeURIComponent(raw ?? "");
+  } catch {
+    return raw ?? "";
+  }
+}
+
+function ownedSchedule(handler: Handler, botId: string, id: string): Schedule {
+  if (handler.store.hasSchedule(id)) {
+    const schedule = handler.store.getSchedule(id);
+    if (schedule.botId === botId) return schedule;
+  }
+  throw new HttpError(404, `Unknown schedule ${id}.`);
+}
+
+/** A schedule with its pause state and its next and last run, for the CLI. */
+function listing(handler: Handler, schedule: Schedule): ScheduleListing {
+  const paused = handler.store.isSchedulePaused(schedule.id);
+  const next = paused ? null : nextRun(schedule, Date.now());
+  const last = handler.store.latestReceipt(schedule.id);
+  return {
+    ...schedule,
+    paused,
+    nextRunAt: next === null ? null : new Date(next).toISOString(),
+    lastRunAt: last === null ? null : new Date(last).toISOString(),
+  };
+}
+
+/**
  * The first turn of a bot's conversation.
  * A description is the role to keep. Without one, the bot asks what it is for.
  * The model writes AGENTS.md and MEMORY.md when the turn gives it something to keep.
@@ -316,6 +485,7 @@ async function createBot(
     opencodeModelConfig(handler.model),
   );
   handler.store.createThread({ botId: bot.id, cwd: directory });
+  grantScheduleAccess(handler, bot.id);
   switch (engine) {
     case engines.opencode:
       await runTurn(
