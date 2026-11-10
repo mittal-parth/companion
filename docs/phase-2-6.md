@@ -62,4 +62,4 @@ COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/src/schedule-cli.live.test.ts
 
 The CLI tests cover bad input, a token that does not belong, a schedule id from another bot, a missing daemon, and a one-time schedule that fires. The live test needs `opencode` on `PATH` (or `OPENCODE_BIN`) and `SARVAM_API_KEY`. It asks the bot for a daily 9:00 task, then to pause it and delete it.
 
-OpenCode is started with plain `opencode acp`. Version 1.19 prints its help and exits when `--print-logs` is passed, so the daemon does not pass it. The live test runs on `sarvam/sarvam-105b`, which is the id OpenCode 1.19 lists for Sarvam. The shim runs the CLI with `node`, which runs TypeScript directly, so packaging the daemon later has to revisit that.
+OpenCode is started with plain `opencode acp`. Version 1.19 prints its help and exits when `--print-logs` is passed, so the daemon does not pass it. The live test uses the daemon's default model, `sarvam/glm5.3`. Web search is a separate setting in the same config, so that model still has it. The shim runs the CLI with `node`, which runs TypeScript directly, so packaging the daemon later has to revisit that.

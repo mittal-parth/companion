@@ -36,7 +36,6 @@ test.skipIf(!live)(
     const daemon = await startDaemon({
       storePath: join(directory, "threads.db"),
       opencodeBin,
-      model: "sarvam/sarvam-105b",
       log: (entry) => entries.push(entry),
     });
     try {
