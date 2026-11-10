@@ -10,17 +10,20 @@ import { DatabaseSync } from "node:sqlite";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   engineNames,
+  validateSchedule,
   type Bot,
   type EngineName,
+  type Schedule,
   type Thread,
   type ThreadResume,
   type ThreadSummary,
 } from "@companion/shared";
 
-const schemaVersion = 1;
+const schemaVersion = 2;
 
 /**
- * Bots, the threads they own, and the session updates that form each transcript.
+ * Bots, the threads they own, the session updates that form each transcript,
+ * and the schedules that later send a prompt into a conversation.
  * A newer file is refused so an old daemon does not misread it.
  */
 const schema = `
@@ -43,6 +46,18 @@ const schema = `
     seq INTEGER NOT NULL,
     body TEXT NOT NULL,
     PRIMARY KEY (thread_id, seq)
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS schedules (
+    id TEXT PRIMARY KEY,
+    bot_id TEXT NOT NULL REFERENCES bots(id),
+    body TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS schedule_receipts (
+    schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+    occurrence INTEGER NOT NULL,
+    PRIMARY KEY (schedule_id, occurrence)
   ) STRICT;
 `;
 
@@ -68,6 +83,25 @@ export type ThreadStore = {
   listThreads(botId?: string): ThreadSummary[];
   /** The engine to start, and the session and directory to load. */
   resume(threadId: string): ThreadResume;
+  /** Stores a schedule. Saving does not arm it; the daemon does that. */
+  saveSchedule(schedule: Schedule): void;
+  /** Reads one schedule back. */
+  getSchedule(id: string): Schedule;
+  /** Whether a schedule is still stored. */
+  hasSchedule(id: string): boolean;
+  /** Lists schedules in the order they were stored. Omitting the bot lists them all. */
+  listSchedules(botId?: string): Schedule[];
+  /** Removes a schedule and the receipts for its finished turns. */
+  deleteSchedule(id: string): void;
+  /**
+   * Records that the turn for this occurrence came back.
+   * A crash or a thrown prompt leaves no row, so a later catch-up can retry it.
+   */
+  recordReceipt(scheduleId: string, occurrence: number): void;
+  /** The latest finished occurrence, if a turn has come back. */
+  latestReceipt(scheduleId: string): number | null;
+  /** Finished occurrences, oldest first. */
+  receipts(scheduleId: string): number[];
   /** Closes the database so a later open sees every write. */
   close(): void;
 };
@@ -126,7 +160,7 @@ function migrate(db: DatabaseSync): void {
     throw new Error(`Unsupported thread store version ${version}.`);
   }
   db.exec(schema);
-  if (version === 0) {
+  if (version < schemaVersion) {
     db.exec(`PRAGMA user_version = ${schemaVersion}`);
   }
 }
@@ -171,6 +205,31 @@ function store(db: DatabaseSync): ThreadStore {
   );
   const selectUpdates = db.prepare(
     "SELECT body FROM updates WHERE thread_id = ? ORDER BY seq",
+  );
+  const insertSchedule = db.prepare(
+    "INSERT INTO schedules (id, bot_id, body) VALUES (?, ?, ?)",
+  );
+  const selectSchedule = db.prepare(
+    "SELECT id, bot_id, body FROM schedules WHERE id = ?",
+  );
+  const selectSchedules = db.prepare(
+    "SELECT id, bot_id, body FROM schedules ORDER BY rowid",
+  );
+  const selectBotSchedules = db.prepare(
+    "SELECT id, bot_id, body FROM schedules WHERE bot_id = ? ORDER BY rowid",
+  );
+  const deleteScheduleRow = db.prepare("DELETE FROM schedules WHERE id = ?");
+  const insertReceipt = db.prepare(
+    `INSERT OR IGNORE INTO schedule_receipts (schedule_id, occurrence)
+     VALUES (?, ?)`,
+  );
+  const selectLatestReceipt = db.prepare(
+    `SELECT MAX(occurrence) AS occurrence
+     FROM schedule_receipts WHERE schedule_id = ?`,
+  );
+  const selectReceipts = db.prepare(
+    `SELECT occurrence FROM schedule_receipts
+     WHERE schedule_id = ? ORDER BY occurrence`,
   );
 
   function requireBot(id: string): Bot {
@@ -265,10 +324,72 @@ function store(db: DatabaseSync): ThreadStore {
       };
     },
 
+    saveSchedule(schedule) {
+      const parsed = validateSchedule(schedule);
+      if (!parsed.ok) throw new Error(parsed.reason);
+      requireBot(parsed.schedule.botId);
+      insertSchedule.run(
+        parsed.schedule.id,
+        parsed.schedule.botId,
+        JSON.stringify(parsed.schedule),
+      );
+    },
+
+    getSchedule(id) {
+      return requireSchedule(id);
+    },
+
+    hasSchedule(id) {
+      return selectSchedule.get(id) !== undefined;
+    },
+
+    listSchedules(botId) {
+      if (botId !== undefined) requireBot(botId);
+      const rows =
+        botId === undefined
+          ? selectSchedules.all()
+          : selectBotSchedules.all(botId);
+      return rows.map((row) => scheduleFrom(row));
+    },
+
+    deleteSchedule(id) {
+      requireSchedule(id);
+      const result = deleteScheduleRow.run(id);
+      if (!changed(result.changes)) {
+        throw new Error(`Unknown schedule ${id}.`);
+      }
+    },
+
+    recordReceipt(scheduleId, occurrence) {
+      requireSchedule(scheduleId);
+      if (!Number.isSafeInteger(occurrence)) {
+        throw new Error("A receipt needs the occurrence it finished.");
+      }
+      insertReceipt.run(scheduleId, occurrence);
+    },
+
+    latestReceipt(scheduleId) {
+      requireSchedule(scheduleId);
+      const row = selectLatestReceipt.get(scheduleId);
+      if (row === undefined || row.occurrence === null) return null;
+      return epoch(row.occurrence);
+    },
+
+    receipts(scheduleId) {
+      requireSchedule(scheduleId);
+      return selectReceipts.all(scheduleId).map((row) => epoch(row.occurrence));
+    },
+
     close() {
       db.close();
     },
   };
+
+  function requireSchedule(id: string): Schedule {
+    const row = selectSchedule.get(id);
+    if (row === undefined) throw new Error(`Unknown schedule ${id}.`);
+    return scheduleFrom(row);
+  }
 }
 
 type SqlValue = string | number | bigint | null | Uint8Array;
@@ -306,6 +427,37 @@ function readUpdate(body: SqlValue): acp.SessionUpdate {
     return value as acp.SessionUpdate;
   }
   throw new Error("A stored session update could not be read.");
+}
+
+function scheduleFrom(row: SqlRow): Schedule {
+  const id = text(row, "id");
+  const botId = text(row, "bot_id");
+  const body = text(row, "body");
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    throw new Error("A stored schedule could not be read.");
+  }
+  const parsed = validateSchedule(value);
+  if (
+    !parsed.ok ||
+    parsed.schedule.id !== id ||
+    parsed.schedule.botId !== botId
+  ) {
+    throw new Error("A stored schedule could not be read.");
+  }
+  return parsed.schedule;
+}
+
+function epoch(value: SqlValue): number {
+  if (typeof value === "number" && Number.isSafeInteger(value)) return value;
+  if (typeof value === "bigint") return Number(value);
+  throw new Error("A stored schedule could not be read.");
+}
+
+function changed(value: number | bigint): boolean {
+  return value !== 0 && value !== 0n;
 }
 
 function readEngine(value: string): EngineName {

@@ -148,16 +148,69 @@ test("the thread database is separate from the engine store", () => {
   );
 });
 
+test("a schedule and its finished occurrences survive a restart", () => {
+  withDirectory((directory) => {
+    const path = join(directory, "threads.db");
+    const store = openThreadStore(path);
+    const bot = store.createBot({ name: "Ada", engine: "opencode" });
+    const schedule = {
+      id: "weather",
+      botId: bot.id,
+      prompt: "Check the weather",
+      kind: "once" as const,
+      at: 1_700_000_000_000,
+    };
+    store.saveSchedule(schedule);
+    store.recordReceipt(schedule.id, schedule.at);
+    store.close();
+
+    const restored = openThreadStore(path);
+    expect(restored.listSchedules(bot.id)).toEqual([schedule]);
+    expect(restored.receipts(schedule.id)).toEqual([schedule.at]);
+    expect(restored.latestReceipt(schedule.id)).toBe(schedule.at);
+    restored.deleteSchedule(schedule.id);
+    expect(restored.hasSchedule(schedule.id)).toBe(false);
+    expect(restored.listSchedules()).toEqual([]);
+    restored.close();
+  });
+});
+
+test("an older thread database gains schedules on open", () => {
+  withDirectory((directory) => {
+    const path = join(directory, "threads.db");
+    const created = openThreadStore(path);
+    const bot = created.createBot({ name: "Ada", engine: "opencode" });
+    created.close();
+
+    const db = new DatabaseSync(path);
+    db.exec("DROP TABLE schedule_receipts");
+    db.exec("DROP TABLE schedules");
+    db.exec("PRAGMA user_version = 1");
+    db.close();
+
+    const restored = openThreadStore(path);
+    restored.saveSchedule({
+      id: "weather",
+      botId: bot.id,
+      prompt: "Check the weather",
+      kind: "once",
+      at: 1_700_000_000_000,
+    });
+    expect(restored.getSchedule("weather").prompt).toBe("Check the weather");
+    restored.close();
+  });
+});
+
 test("a newer thread database is refused", () => {
   withDirectory((directory) => {
     const path = join(directory, "threads.db");
     const store = openThreadStore(path);
     store.close();
     const db = new DatabaseSync(path);
-    db.exec("PRAGMA user_version = 2");
+    db.exec("PRAGMA user_version = 3");
     db.close();
     expect(() => openThreadStore(path)).toThrow(
-      "Unsupported thread store version 2.",
+      "Unsupported thread store version 3.",
     );
   });
 });
