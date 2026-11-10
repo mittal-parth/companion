@@ -161,12 +161,14 @@ test("a schedule and its finished occurrences survive a restart", () => {
       at: 1_700_000_000_000,
     };
     store.saveSchedule(schedule);
-    store.recordReceipt(schedule.id, schedule.at);
+    store.recordReceipt(schedule.id, schedule.at, "ran");
     store.close();
 
     const restored = openThreadStore(path);
     expect(restored.listSchedules(bot.id)).toEqual([schedule]);
-    expect(restored.receipts(schedule.id)).toEqual([schedule.at]);
+    expect(restored.receipts(schedule.id)).toEqual([
+      { occurrence: schedule.at, outcome: "ran" },
+    ]);
     expect(restored.latestReceipt(schedule.id)).toBe(schedule.at);
     restored.deleteSchedule(schedule.id);
     expect(restored.hasSchedule(schedule.id)).toBe(false);
@@ -207,42 +209,16 @@ test("a schedule starts unpaused and a pause survives a restart", () => {
   });
 });
 
-test("an older thread database gains schedules on open", () => {
-  withDirectory((directory) => {
-    const path = join(directory, "threads.db");
-    const created = openThreadStore(path);
-    const bot = created.createBot({ name: "Ada", engine: "opencode" });
-    created.close();
-
-    const db = new DatabaseSync(path);
-    db.exec("DROP TABLE schedule_receipts");
-    db.exec("DROP TABLE schedules");
-    db.exec("PRAGMA user_version = 1");
-    db.close();
-
-    const restored = openThreadStore(path);
-    restored.saveSchedule({
-      id: "weather",
-      botId: bot.id,
-      prompt: "Check the weather",
-      kind: "once",
-      at: 1_700_000_000_000,
-    });
-    expect(restored.getSchedule("weather").prompt).toBe("Check the weather");
-    restored.close();
-  });
-});
-
 test("a newer thread database is refused", () => {
   withDirectory((directory) => {
     const path = join(directory, "threads.db");
     const store = openThreadStore(path);
     store.close();
     const db = new DatabaseSync(path);
-    db.exec("PRAGMA user_version = 3");
+    db.exec("PRAGMA user_version = 4");
     db.close();
     expect(() => openThreadStore(path)).toThrow(
-      "Unsupported thread store version 3.",
+      "Unsupported thread store version 4.",
     );
   });
 });

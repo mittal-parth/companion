@@ -381,7 +381,9 @@ test("a one-time schedule created through the CLI fires once", async () => {
         at,
       ]);
       await waitFor(() => prompts.includes("Check the weather"));
-      expect(daemon.receipts(created.schedule.id)).toEqual([Date.parse(at)]);
+      expect(daemon.receipts(created.schedule.id)).toEqual([
+        { occurrence: Date.parse(at), outcome: "ran" },
+      ]);
     },
     {
       async prompt(_botId, text) {

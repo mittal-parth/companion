@@ -1,10 +1,12 @@
 /**
  * Proves a schedule fires once into the bot's conversation on a real clock.
  * The engine is scripted. A cron and an interval wait for the next minute.
+ * Catch-up uses that same clock: a missed slot is one that is already in the past.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   nextRun,
@@ -14,6 +16,7 @@ import {
 import { expect, test } from "vitest";
 import { startDaemon, type Daemon } from "./api.js";
 import type { Engine } from "./engine.js";
+import { openThreadStore } from "./thread-store.js";
 
 const weather = "Check the weather and tell me if I need an umbrella.";
 const umbrella: acp.SessionUpdate = {
@@ -40,7 +43,9 @@ test("a one-time schedule fires once and a restart does not repeat it", async ()
     await waitFor(
       () => prompts.filter((prompt) => prompt === weather).length === 1,
     );
-    expect(daemon.receipts(schedule.id)).toEqual([at]);
+    expect(daemon.receipts(schedule.id)).toEqual([
+      { occurrence: at, outcome: "ran" },
+    ]);
     const stored = await fetch(`${daemon.url}/bots/${bot.id}`);
     expect(await stored.json()).toMatchObject({ updates: [umbrella] });
 
@@ -48,7 +53,9 @@ test("a one-time schedule fires once and a restart does not repeat it", async ()
     daemon = await startDaemon({ storePath, engine: recording(prompts) });
     await delay(500);
     expect(prompts.filter((prompt) => prompt === weather)).toEqual([weather]);
-    expect(daemon.receipts(schedule.id)).toEqual([at]);
+    expect(daemon.receipts(schedule.id)).toEqual([
+      { occurrence: at, outcome: "ran" },
+    ]);
     expect(daemon.listSchedules(bot.id)).toEqual([schedule]);
   } finally {
     await daemon?.close();
@@ -56,12 +63,15 @@ test("a one-time schedule fires once and a restart does not repeat it", async ()
   }
 });
 
-test("a thrown prompt leaves the slot unfinished and a restart does not retry it", async () => {
+test("a thrown prompt is not retried until the next start, and then only inside the window", async () => {
   const prompts: string[] = [];
+  let attempts = 0;
   const engine: Engine = {
     async prompt(_botId, text) {
+      if (text.startsWith("Your name is")) return "end_turn";
       prompts.push(text);
-      if (text === weather) throw new Error("OpenCode exploded.");
+      attempts += 1;
+      if (attempts === 1) throw new Error("OpenCode exploded.");
       return "end_turn";
     },
     async close() {},
@@ -80,14 +90,25 @@ test("a thrown prompt leaves the slot unfinished and a restart does not retry it
       at,
     });
     await waitFor(() => prompts.includes(weather));
-    await delay(Math.max(0, at + 50 - Date.now()));
+    await delay(Math.max(0, at + 400 - Date.now()));
+    expect(prompts.filter((prompt) => prompt === weather)).toEqual([weather]);
     expect(daemon.receipts(schedule.id)).toEqual([]);
 
     await daemon.close();
-    daemon = await startDaemon({ storePath, engine });
-    await delay(500);
-    expect(prompts.filter((prompt) => prompt === weather)).toEqual([weather]);
-    expect(daemon.receipts(schedule.id)).toEqual([]);
+    const restarted = await startDaemon({ storePath, engine });
+    daemon = restarted;
+    await waitFor(
+      () =>
+        prompts.filter((prompt) => prompt === weather).length === 2 &&
+        restarted.receipts(schedule.id).length === 1,
+    );
+    expect(prompts.filter((prompt) => prompt === weather)).toEqual([
+      weather,
+      weather,
+    ]);
+    expect(daemon.receipts(schedule.id)).toEqual([
+      { occurrence: at, outcome: "ran" },
+    ]);
   } finally {
     await daemon?.close();
     rmSync(directory, { recursive: true, force: true });
@@ -147,7 +168,9 @@ test("a schedule waits until the bot's turn finishes", async () => {
     expect((await pending).status).toBe(200);
     await waitFor(() => sentAt !== 0);
     expect(sentAt).toBeGreaterThanOrEqual(releasedAt);
-    expect(daemon.receipts(schedule.id)).toEqual([at]);
+    expect(daemon.receipts(schedule.id)).toEqual([
+      { occurrence: at, outcome: "ran" },
+    ]);
     const stored = await fetch(`${daemon.url}/bots/${bot.id}`);
     const body = JSON.stringify(await stored.json());
     expect(body).toContain("Bring an umbrella.");
@@ -248,7 +271,9 @@ test("a resumed schedule fires once at its next slot and logs the trace", async 
     daemon.resumeSchedule(schedule.id);
     await waitFor(() => daemon?.receipts(schedule.id).length === 1);
     expect(prompts.filter((prompt) => prompt === weather)).toEqual([weather]);
-    expect(daemon.receipts(schedule.id)).toEqual([at]);
+    expect(daemon.receipts(schedule.id)).toEqual([
+      { occurrence: at, outcome: "ran" },
+    ]);
     expect(entries.map((entry) => entry.event)).toEqual([
       "created",
       "armed",
@@ -402,8 +427,9 @@ test("a cron and an interval fire once on the next real minute", async () => {
     );
     const fired = daemon.receipts(cron.id);
     expect(fired).toHaveLength(1);
-    const occurrence = fired[0];
+    const occurrence = fired[0]?.occurrence;
     expect(occurrence).toBeTypeOf("number");
+    expect(fired[0]?.outcome).toBe("ran");
     expect(daemon.receipts(interval.id)).toEqual(fired);
     expect(prompts.filter((prompt) => prompt === "Daily weather")).toEqual([
       "Daily weather",
@@ -427,6 +453,184 @@ test("a cron and an interval fire once on the next real minute", async () => {
     rmSync(directory, { recursive: true, force: true });
   }
 }, 90_000);
+
+test("downtime runs the latest slot still inside the window and skips the older ones", async () => {
+  const prompts: string[] = [];
+  const directory = mkdtempSync(join(tmpdir(), "companion-schedule-"));
+  const storePath = join(directory, "threads.db");
+  let daemon: Daemon | undefined;
+  try {
+    daemon = await startDaemon({ storePath, engine: recording(prompts) });
+    const bot = await createBot(daemon, "Ada");
+    await daemon.close();
+    daemon = undefined;
+
+    const now = Date.now();
+    const minute = 60_000;
+    const hour = 60 * minute;
+    const dailyMiss = now - 3 * hour;
+    const recent = now - 20 * minute;
+    const earlier = recent - 60 * minute;
+    const staleOnce = now - 3 * minute;
+    const freshOnce = now - 30_000;
+    const store = openThreadStore(storePath);
+    store.saveSchedule({
+      id: "daily",
+      botId: bot.id,
+      prompt: "Daily weather",
+      kind: "interval",
+      everyMinutes: 1440,
+      anchorAt: dailyMiss,
+      timezone: "UTC",
+    });
+    store.saveSchedule({
+      id: "hourly",
+      botId: bot.id,
+      prompt: "Hourly weather",
+      kind: "interval",
+      everyMinutes: 60,
+      anchorAt: earlier,
+      timezone: "UTC",
+    });
+    store.saveSchedule({
+      id: "stale",
+      botId: bot.id,
+      prompt: "Stale once",
+      kind: "once",
+      at: staleOnce,
+    });
+    store.saveSchedule({
+      id: "fresh",
+      botId: bot.id,
+      prompt: "Fresh once",
+      kind: "once",
+      at: freshOnce,
+    });
+    store.close();
+    const db = new DatabaseSync(storePath);
+    const setCreated = db.prepare(
+      "UPDATE schedules SET created_at = ? WHERE id = ?",
+    );
+    setCreated.run(dailyMiss - 1000, "daily");
+    setCreated.run(earlier - 1000, "hourly");
+    setCreated.run(staleOnce - 1000, "stale");
+    setCreated.run(freshOnce - 1000, "fresh");
+    db.close();
+
+    const caughtUp = await startDaemon({
+      storePath,
+      engine: recording(prompts),
+    });
+    daemon = caughtUp;
+    await waitFor(
+      () =>
+        caughtUp
+          .receipts("hourly")
+          .some((receipt) => receipt.outcome === "ran") &&
+        caughtUp.receipts("fresh").some((receipt) => receipt.outcome === "ran"),
+    );
+    expect(prompts.filter((prompt) => prompt === "Daily weather")).toEqual([]);
+    expect(prompts.filter((prompt) => prompt === "Stale once")).toEqual([]);
+    expect(prompts.filter((prompt) => prompt === "Hourly weather")).toEqual([
+      "Hourly weather",
+    ]);
+    expect(prompts.filter((prompt) => prompt === "Fresh once")).toEqual([
+      "Fresh once",
+    ]);
+    expect(daemon.receipts("daily")).toEqual([
+      { occurrence: dailyMiss, outcome: "skipped" },
+    ]);
+    expect(daemon.receipts("hourly")).toEqual([
+      { occurrence: earlier, outcome: "skipped" },
+      { occurrence: recent, outcome: "ran" },
+    ]);
+    expect(daemon.receipts("stale")).toEqual([
+      { occurrence: staleOnce, outcome: "skipped" },
+    ]);
+    expect(daemon.receipts("fresh")).toEqual([
+      { occurrence: freshOnce, outcome: "ran" },
+    ]);
+  } finally {
+    await daemon?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("slots that pass while a person is talking still run", async () => {
+  let release: () => void = () => {};
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let started: () => void = () => {};
+  const running = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const prompts: string[] = [];
+  const engine: Engine = {
+    async prompt(_botId, text, onUpdate) {
+      if (text.startsWith("Your name is")) return "end_turn";
+      if (text === "hold") {
+        started();
+        await hold;
+        return "end_turn";
+      }
+      prompts.push(text);
+      onUpdate(umbrella);
+      return "end_turn";
+    },
+    async close() {},
+  };
+  const directory = mkdtempSync(join(tmpdir(), "companion-schedule-"));
+  let daemon: Daemon | undefined;
+  let pending: Promise<Response> | undefined;
+  try {
+    daemon = await startDaemon({
+      storePath: join(directory, "threads.db"),
+      engine,
+    });
+    const bot = await createBot(daemon, "Ada");
+    pending = postJson(daemon, `/bots/${bot.id}/messages`, { text: "hold" });
+    await running;
+    const slot = await upcomingMinute();
+    const schedule = daemon.createSchedule({
+      botId: bot.id,
+      prompt: "Interval weather",
+      kind: "interval",
+      everyMinutes: 1,
+      anchorAt: slot,
+      timezone: "UTC",
+    });
+    await delay(Math.max(0, slot + 60_000 + 300 - Date.now()));
+    release();
+    expect((await pending).status).toBe(200);
+    const live = daemon;
+    await waitFor(() => {
+      const decided = live.receipts(schedule.id);
+      const last = decided[decided.length - 1];
+      return (
+        decided.length >= 2 && last?.outcome === "ran" && last.occurrence > slot
+      );
+    }, 10_000);
+    const receipts = daemon.receipts(schedule.id);
+    expect(receipts[0]).toEqual({ occurrence: slot, outcome: "ran" });
+    const last = receipts[receipts.length - 1];
+    expect(last?.outcome).toBe("ran");
+    expect(last?.occurrence).toBeGreaterThan(slot);
+    for (const receipt of receipts.slice(1, -1)) {
+      expect(receipt.outcome).toBe("skipped");
+    }
+    expect(
+      prompts.filter((prompt) => prompt === "Interval weather"),
+    ).toHaveLength(
+      receipts.filter((receipt) => receipt.outcome === "ran").length,
+    );
+  } finally {
+    release();
+    await pending?.catch(() => undefined);
+    await daemon?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 180_000);
 
 /**
  * The next UTC minute, at least two seconds away.

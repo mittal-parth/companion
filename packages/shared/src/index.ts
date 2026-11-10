@@ -1,5 +1,6 @@
 /**
- * Shared types for bots, threads, a recorded engine turn, an approval, and a schedule.
+ * Shared types for bots, threads, a recorded engine turn, an approval, a schedule,
+ * and the receipt that records what the daemon decided for one slot.
  * Session update fields match what OpenCode sent, stored in the hello fixture.
  */
 import type * as acp from "@agentclientprotocol/sdk";
@@ -77,6 +78,19 @@ export type ThreadResume = {
   engine: EngineName;
   sessionId: string;
   cwd: string;
+};
+
+/**
+ * What the daemon decided for one slot.
+ * `ran` means the turn came back. `skipped` means the slot was too late to send.
+ * A run of skipped slots is the stretch where the daemon was not firing.
+ */
+export type ScheduleReceiptOutcome = "ran" | "skipped";
+
+/** One decided slot, in the order the schedule named it. */
+export type ScheduleReceipt = {
+  occurrence: number;
+  outcome: ScheduleReceiptOutcome;
 };
 
 /** The user's decision on a sensitive action. */

@@ -14,12 +14,14 @@ import {
   type Bot,
   type EngineName,
   type Schedule,
+  type ScheduleReceipt,
+  type ScheduleReceiptOutcome,
   type Thread,
   type ThreadResume,
   type ThreadSummary,
 } from "@companion/shared";
 
-const schemaVersion = 2;
+const schemaVersion = 3;
 
 /**
  * Bots, the threads they own, the session updates that form each transcript,
@@ -52,12 +54,14 @@ const schema = `
     id TEXT PRIMARY KEY,
     bot_id TEXT NOT NULL REFERENCES bots(id),
     body TEXT NOT NULL,
-    paused INTEGER NOT NULL DEFAULT 0
+    paused INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS schedule_receipts (
     schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
     occurrence INTEGER NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('ran', 'skipped')),
     PRIMARY KEY (schedule_id, occurrence)
   ) STRICT;
 `;
@@ -92,21 +96,27 @@ export type ThreadStore = {
   hasSchedule(id: string): boolean;
   /** Lists schedules in the order they were stored. Omitting the bot lists them all. */
   listSchedules(botId?: string): Schedule[];
-  /** Removes a schedule and the receipts for its finished turns. */
+  /** Removes a schedule and the receipts for its decided slots. */
   deleteSchedule(id: string): void;
   /** Turns a schedule off or on. A paused schedule stays stored but never fires. */
   setSchedulePaused(id: string, paused: boolean): void;
   /** Whether a stored schedule is paused. */
   isSchedulePaused(id: string): boolean;
   /**
-   * Records that the turn for this occurrence came back.
-   * A crash or a thrown prompt leaves no row, so a later catch-up can retry it.
+   * Records the decision for one slot.
+   * A crash or a thrown prompt leaves no row, so a later start can decide it again.
    */
-  recordReceipt(scheduleId: string, occurrence: number): void;
-  /** The latest finished occurrence, if a turn has come back. */
+  recordReceipt(
+    scheduleId: string,
+    occurrence: number,
+    outcome: ScheduleReceiptOutcome,
+  ): void;
+  /** When the schedule was saved. Slots from before this are not catch-up. */
+  scheduleCreatedAt(id: string): number;
+  /** The latest decided slot, if one has been recorded. */
   latestReceipt(scheduleId: string): number | null;
-  /** Finished occurrences, oldest first. */
-  receipts(scheduleId: string): number[];
+  /** Decided slots, oldest first. */
+  receipts(scheduleId: string): ScheduleReceipt[];
   /** Closes the database so a later open sees every write. */
   close(): void;
 };
@@ -159,6 +169,10 @@ export function openThreadStore(path: string): ThreadStore {
   return store(db);
 }
 
+/**
+ * Creates the tables and stamps the file.
+ * Nothing has shipped, so an older file is not altered. A newer file is refused.
+ */
 function migrate(db: DatabaseSync): void {
   const version = readVersion(db);
   if (version > schemaVersion) {
@@ -212,10 +226,13 @@ function store(db: DatabaseSync): ThreadStore {
     "SELECT body FROM updates WHERE thread_id = ? ORDER BY seq",
   );
   const insertSchedule = db.prepare(
-    "INSERT INTO schedules (id, bot_id, body) VALUES (?, ?, ?)",
+    "INSERT INTO schedules (id, bot_id, body, created_at) VALUES (?, ?, ?, ?)",
   );
   const selectSchedule = db.prepare(
     "SELECT id, bot_id, body FROM schedules WHERE id = ?",
+  );
+  const selectCreatedAt = db.prepare(
+    "SELECT created_at FROM schedules WHERE id = ?",
   );
   const selectSchedules = db.prepare(
     "SELECT id, bot_id, body FROM schedules ORDER BY rowid",
@@ -229,15 +246,15 @@ function store(db: DatabaseSync): ThreadStore {
   );
   const selectPaused = db.prepare("SELECT paused FROM schedules WHERE id = ?");
   const insertReceipt = db.prepare(
-    `INSERT OR IGNORE INTO schedule_receipts (schedule_id, occurrence)
-     VALUES (?, ?)`,
+    `INSERT OR IGNORE INTO schedule_receipts (schedule_id, occurrence, outcome)
+     VALUES (?, ?, ?)`,
   );
   const selectLatestReceipt = db.prepare(
     `SELECT MAX(occurrence) AS occurrence
      FROM schedule_receipts WHERE schedule_id = ?`,
   );
   const selectReceipts = db.prepare(
-    `SELECT occurrence FROM schedule_receipts
+    `SELECT occurrence, outcome FROM schedule_receipts
      WHERE schedule_id = ? ORDER BY occurrence`,
   );
 
@@ -341,6 +358,7 @@ function store(db: DatabaseSync): ThreadStore {
         parsed.schedule.id,
         parsed.schedule.botId,
         JSON.stringify(parsed.schedule),
+        Date.now(),
       );
     },
 
@@ -380,12 +398,19 @@ function store(db: DatabaseSync): ThreadStore {
       return row !== undefined && row.paused !== 0;
     },
 
-    recordReceipt(scheduleId, occurrence) {
+    recordReceipt(scheduleId, occurrence, outcome) {
       requireSchedule(scheduleId);
       if (!Number.isSafeInteger(occurrence)) {
         throw new Error("A receipt needs the occurrence it finished.");
       }
-      insertReceipt.run(scheduleId, occurrence);
+      insertReceipt.run(scheduleId, occurrence, receiptOutcome(outcome));
+    },
+
+    scheduleCreatedAt(id) {
+      requireSchedule(id);
+      const row = selectCreatedAt.get(id);
+      if (row === undefined) throw new Error(`Unknown schedule ${id}.`);
+      return epoch(row.created_at);
     },
 
     latestReceipt(scheduleId) {
@@ -397,7 +422,10 @@ function store(db: DatabaseSync): ThreadStore {
 
     receipts(scheduleId) {
       requireSchedule(scheduleId);
-      return selectReceipts.all(scheduleId).map((row) => epoch(row.occurrence));
+      return selectReceipts.all(scheduleId).map((row) => ({
+        occurrence: epoch(row.occurrence),
+        outcome: readOutcome(row.outcome),
+      }));
     },
 
     close() {
@@ -468,6 +496,27 @@ function scheduleFrom(row: SqlRow): Schedule {
     throw new Error("A stored schedule could not be read.");
   }
   return parsed.schedule;
+}
+
+function receiptOutcome(
+  outcome: ScheduleReceiptOutcome,
+): ScheduleReceiptOutcome {
+  switch (outcome) {
+    case "ran":
+    case "skipped":
+      return outcome;
+    default: {
+      const unexpected: never = outcome;
+      throw new Error(
+        `A receipt outcome must be ran or skipped, not ${String(unexpected)}.`,
+      );
+    }
+  }
+}
+
+function readOutcome(value: SqlValue): ScheduleReceiptOutcome {
+  if (value === "ran" || value === "skipped") return value;
+  throw new Error("A stored schedule could not be read.");
 }
 
 function epoch(value: SqlValue): number {

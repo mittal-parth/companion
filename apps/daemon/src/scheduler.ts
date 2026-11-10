@@ -1,13 +1,11 @@
 /**
  * Sends a schedule's prompt into the bot's conversation when its slot arrives.
  *
- * The schedule maths names the next occurrence. Croner only waits for that
- * instant. The receipt is written when the turn comes back, so a crash or a
- * thrown prompt leaves the slot unfinished for catch-up.
- *
- * A paused schedule is never armed and never fires. Pausing writes no receipt
- * and nothing catches up what was missed: resuming waits for the next slot.
- * Every step is logged so a firing can be traced afterwards.
+ * After downtime, or when slots pass while the bot is already in a turn, the
+ * latest missed slot is sent once if it is still inside the catch-up window.
+ * Older missed slots are recorded as skipped. A thrown prompt leaves no
+ * receipt, so the next start can decide that slot. While this process stays
+ * up, that throw is not tried again.
  */
 import { randomUUID } from "node:crypto";
 import { Cron } from "croner";
@@ -16,8 +14,14 @@ import {
   validateSchedule,
   type Schedule,
   type ScheduleLogEntry,
+  type ScheduleReceipt,
 } from "@companion/shared";
 import type { ThreadStore } from "./thread-store.js";
+
+/** Half a gap shorter than this is still worth this long. One-time slots use it. */
+const minimumCatchUpMs = 2 * 60 * 1000;
+/** Half a gap longer than this is not worth longer than this. */
+const maximumCatchUpMs = 2 * 60 * 60 * 1000;
 
 /** Stores schedules and fires the ones that are already saved. */
 export type Scheduler = {
@@ -33,8 +37,8 @@ export type Scheduler = {
   resume(id: string): void;
   /** Whether the schedule is paused. */
   isPaused(id: string): boolean;
-  /** Occurrences whose turns came back, oldest first. */
-  receipts(id: string): number[];
+  /** Slots the daemon has decided, oldest first. */
+  receipts(id: string): ScheduleReceipt[];
   /** Drops the waits. An in-flight turn is left to finish or fail on its own. */
   stop(): void;
 };
@@ -42,6 +46,7 @@ export type Scheduler = {
 /**
  * Arms every stored schedule, and accepts new ones.
  * `send` resolves when the bot's turn comes back and rejects when it throws.
+ * A bot that is already talking makes `send` wait, then the prompt goes out.
  */
 export function startScheduler(options: {
   store: ThreadStore;
@@ -67,27 +72,100 @@ export function startScheduler(options: {
     });
   }
 
-  function disarm(id: string): void {
-    jobs.get(id)?.stop();
-    jobs.delete(id);
+  function paused(schedule: Schedule): boolean {
+    return options.store.isSchedulePaused(schedule.id);
   }
 
-  function armAfter(schedule: Schedule, after: number): void {
+  /**
+   * How late this missed slot may be and still be sent.
+   * Half the gap until the following slot, clamped to 2 minutes through 2 hours.
+   * A slot with no following one, including a one-time schedule, gets 2 minutes.
+   */
+  function catchUpWindowMs(schedule: Schedule, occurrence: number): number {
+    const following = nextRun(schedule, occurrence);
+    if (following === null) return minimumCatchUpMs;
+    const half = (following - occurrence) / 2;
+    if (half < minimumCatchUpMs) return minimumCatchUpMs;
+    if (half > maximumCatchUpMs) return maximumCatchUpMs;
+    return half;
+  }
+
+  /** Slots strictly after `after` that are already due at `now`, in order. */
+  function occurrencesThrough(
+    schedule: Schedule,
+    after: number,
+    now: number,
+  ): number[] {
+    const due: number[] = [];
+    let cursor = after;
+    for (;;) {
+      const at = nextRun(schedule, cursor);
+      if (at === null || at > now || at <= cursor) return due;
+      due.push(at);
+      cursor = at;
+    }
+  }
+
+  /**
+   * Decides every slot after `after` that is already due.
+   * The latest one is sent when it is still inside the window. The others are
+   * recorded as skipped. A future slot is armed when nothing remains to send.
+   */
+  function reconcile(schedule: Schedule, after: number): void {
     if (closed || !options.store.hasSchedule(schedule.id)) return;
-    disarm(schedule.id);
-    if (options.store.isSchedulePaused(schedule.id)) return;
+    // Paused schedules stay stored and silent. Nothing is caught up.
+    if (paused(schedule)) {
+      jobs.get(schedule.id)?.stop();
+      jobs.delete(schedule.id);
+      return;
+    }
     const now = Date.now();
-    let at = nextRun(schedule, after);
-    // A slot that already passed stays unfinished so catch-up can decide it.
+    const due = occurrencesThrough(schedule, after, now);
+    if (due.length === 0) {
+      armFuture(schedule, after);
+      return;
+    }
+    const latest = due.at(-1);
+    if (latest === undefined) {
+      armFuture(schedule, after);
+      return;
+    }
+    for (const at of due) {
+      if (at === latest) break;
+      options.store.recordReceipt(schedule.id, at, "skipped");
+    }
+    if (now - latest <= catchUpWindowMs(schedule, latest)) {
+      void deliver(schedule, latest);
+      return;
+    }
+    options.store.recordReceipt(schedule.id, latest, "skipped");
+    armFuture(schedule, latest);
+  }
+
+  /** Waits for the next slot that is still in the future. */
+  function armFuture(schedule: Schedule, after: number): void {
+    if (closed || !options.store.hasSchedule(schedule.id)) return;
+    jobs.get(schedule.id)?.stop();
+    if (paused(schedule)) {
+      jobs.delete(schedule.id);
+      return;
+    }
+    const now = Date.now();
+    let cursor = after;
+    let at = nextRun(schedule, cursor);
     while (at !== null && at <= now) {
       const next = nextRun(schedule, at);
       if (next === null || next <= at) {
         at = null;
         break;
       }
+      cursor = at;
       at = next;
     }
-    if (at === null) return;
+    if (at === null) {
+      jobs.delete(schedule.id);
+      return;
+    }
     const occurrence = at;
     const job = new Cron(new Date(occurrence), { unref: true }, () => {
       void deliver(schedule, occurrence);
@@ -96,6 +174,11 @@ export function startScheduler(options: {
     log("armed", schedule, { occurrence });
   }
 
+  /**
+   * Sends the prompt for a slot that already came due.
+   * The person may be talking. The send waits for that turn, then runs.
+   * This slot already fired while the daemon was up, so the window does not cancel it.
+   */
   async function deliver(
     schedule: Schedule,
     occurrence: number,
@@ -104,44 +187,60 @@ export function startScheduler(options: {
     if (closed || firing.has(key) || !options.store.hasSchedule(schedule.id)) {
       return;
     }
-    if (options.store.isSchedulePaused(schedule.id)) {
+    if (paused(schedule)) {
       log("skipped_paused", schedule, { occurrence });
       return;
     }
-    if (options.store.receipts(schedule.id).includes(occurrence)) {
+    if (hasReceipt(schedule.id, occurrence)) {
       log("skipped_duplicate", schedule, { occurrence });
-      armAfter(schedule, occurrence);
+      reconcile(schedule, occurrence);
       return;
     }
     firing.add(key);
     log("fired", schedule, { occurrence });
+    let failed = false;
     try {
       const result = await options.send(schedule.botId, schedule.prompt);
-      // The turn came back, including a denial or a limit. This slot is done.
       if (options.store.hasSchedule(schedule.id)) {
-        options.store.recordReceipt(schedule.id, occurrence);
+        options.store.recordReceipt(schedule.id, occurrence, "ran");
       }
       log("completed", schedule, {
         occurrence,
         ...(typeof result === "string" ? { detail: result } : {}),
       });
     } catch (error) {
-      // A throw leaves no receipt. Catch-up retries the slot after a restart.
+      // No receipt. The next start decides this slot if it is still in the window.
+      failed = true;
       log("failed", schedule, {
         occurrence,
         detail: error instanceof Error ? error.message : "The prompt failed.",
       });
     } finally {
       firing.delete(key);
-      if (!closed && options.store.hasSchedule(schedule.id)) {
-        armAfter(schedule, occurrence);
-      }
     }
+    if (closed || !options.store.hasSchedule(schedule.id)) return;
+    if (failed) {
+      armFuture(schedule, occurrence);
+      return;
+    }
+    reconcile(schedule, occurrence);
+  }
+
+  function hasReceipt(scheduleId: string, occurrence: number): boolean {
+    return options.store
+      .receipts(scheduleId)
+      .some((receipt) => receipt.occurrence === occurrence);
+  }
+
+  function floor(schedule: Schedule): number {
+    return (
+      options.store.latestReceipt(schedule.id) ??
+      options.store.scheduleCreatedAt(schedule.id)
+    );
   }
 
   for (const schedule of options.store.listSchedules()) {
-    const last = options.store.latestReceipt(schedule.id);
-    armAfter(schedule, last ?? Date.now());
+    reconcile(schedule, floor(schedule));
   }
 
   return {
@@ -151,7 +250,10 @@ export function startScheduler(options: {
       if (!parsed.ok) throw new Error(parsed.reason);
       options.store.saveSchedule(parsed.schedule);
       log("created", parsed.schedule);
-      armAfter(parsed.schedule, Date.now());
+      armFuture(
+        parsed.schedule,
+        options.store.scheduleCreatedAt(parsed.schedule.id),
+      );
       return parsed.schedule;
     },
 
@@ -161,7 +263,8 @@ export function startScheduler(options: {
 
     delete(id) {
       const schedule = options.store.getSchedule(id);
-      disarm(id);
+      jobs.get(id)?.stop();
+      jobs.delete(id);
       options.store.deleteSchedule(id);
       log("deleted", schedule);
     },
@@ -169,7 +272,8 @@ export function startScheduler(options: {
     pause(id) {
       const schedule = options.store.getSchedule(id);
       options.store.setSchedulePaused(id, true);
-      disarm(id);
+      jobs.get(id)?.stop();
+      jobs.delete(id);
       log("paused", schedule);
     },
 
@@ -177,7 +281,8 @@ export function startScheduler(options: {
       const schedule = options.store.getSchedule(id);
       options.store.setSchedulePaused(id, false);
       log("resumed", schedule);
-      armAfter(schedule, Date.now());
+      // Slots that passed while paused are not caught up.
+      reconcile(schedule, Date.now());
     },
 
     isPaused(id) {

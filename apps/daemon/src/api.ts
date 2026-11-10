@@ -26,6 +26,7 @@ import {
   type ScheduleAccess,
   type ScheduleListing,
   type ScheduleLogEntry,
+  type ScheduleReceipt,
   type TurnEvent,
 } from "@companion/shared";
 import {
@@ -55,8 +56,8 @@ export type Daemon = {
   pauseSchedule(id: string): void;
   /** Lets a paused schedule fire at its next slot. Missed slots are skipped. */
   resumeSchedule(id: string): void;
-  /** Occurrences whose turns came back, oldest first. */
-  receipts(scheduleId: string): number[];
+  /** Slots the daemon has decided, oldest first. */
+  receipts(scheduleId: string): ScheduleReceipt[];
   close(): Promise<void>;
 };
 
