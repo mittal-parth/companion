@@ -19,6 +19,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 import {
   engineNames,
   engines,
+  isImageMime,
   nextRun,
   type AttachedImage,
   type Bot,
@@ -116,6 +117,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     options.browser ?? createBrowserHost({ directory: join(root, "browser") });
   const busy = new Set<string>();
   const turns = new Map<string, TurnState>();
+  const followers = new Map<string, Set<(event: TurnEvent) => void>>();
   const idleWaiters = new Map<string, Array<() => void>>();
   let stopping = false;
   const schedulerHolder: { current?: Scheduler } = {};
@@ -151,6 +153,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     model,
     busy,
     turns,
+    followers,
     whenIdle,
     release,
     stopping: () => stopping,
@@ -261,6 +264,8 @@ type Handler = {
   model: string;
   busy: Set<string>;
   turns: Map<string, TurnState>;
+  /** Clients following a bot's running turn, each told every event as it is stored. */
+  followers: Map<string, Set<(event: TurnEvent) => void>>;
   whenIdle(botId: string): Promise<void>;
   release(botId: string): void;
   stopping(): boolean;
@@ -331,7 +336,85 @@ async function handle(
     await sendMessage(req, res, handler, botId);
     return;
   }
+  if (parts.length === 3 && parts[2] === "events") {
+    if (req.method !== "GET") {
+      sendJson(res, 405, { error: "Use GET." });
+      return;
+    }
+    followTurn(res, handler, botId, url.searchParams.get("from"));
+    return;
+  }
   sendJson(res, 404, { error: "Unknown route." });
+}
+
+/**
+ * Lets a client that left come back to a turn: the reply so far, then each
+ * new update as it arrives, ending with how the turn finished.
+ * `from` is where to start in the transcript, defaulting to the running
+ * turn's reply. With nothing to replay and no turn running, the answer is 204.
+ */
+function followTurn(
+  res: ServerResponse,
+  handler: Handler,
+  botId: string,
+  fromParam: string | null,
+): void {
+  const thread = botConversation(handler.store, botId);
+  const turn = handler.turns.get(botId) ?? { status: "idle" };
+  const from = fromParam === null ? undefined : Number(fromParam);
+  if (from !== undefined && (!Number.isInteger(from) || from < 0)) {
+    throw new HttpError(400, "The request's from must be a whole number.");
+  }
+  // Reading the stored reply and joining the live one happen in one tick,
+  // so no update can land between them.
+  const updates = handler.store.getThread(thread.id).updates;
+  const start =
+    from ?? (turn.status === "running" ? turn.replyFrom : updates.length);
+  const ending = turnEnding(turn);
+  if (turn.status !== "running" && (start >= updates.length || !ending)) {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  res.writeHead(200, sseHeaders);
+  for (const update of updates.slice(start)) {
+    writeEvent(res, { event: "update", data: update });
+  }
+  if (ending) {
+    writeEvent(res, ending);
+    res.end();
+    return;
+  }
+  const listeners = handler.followers.get(botId) ?? new Set();
+  handler.followers.set(botId, listeners);
+  const listener = (event: TurnEvent) => {
+    writeEvent(res, event);
+    if (event.event !== "update") {
+      listeners.delete(listener);
+      res.end();
+    }
+  };
+  listeners.add(listener);
+  res.on("close", () => {
+    listeners.delete(listener);
+  });
+}
+
+/** The closing event for a turn that has ended, or undefined while it runs or before any. */
+function turnEnding(turn: TurnState): TurnEvent | undefined {
+  switch (turn.status) {
+    case "idle":
+    case "running":
+      return undefined;
+    case "finished":
+      return { event: "done", data: { stopReason: turn.stopReason } };
+    case "failed":
+      return { event: "error", data: { error: turn.error } };
+    default: {
+      const unexpected: never = turn;
+      throw new Error(`Unexpected turn ${JSON.stringify(unexpected)}.`);
+    }
+  }
 }
 
 /**
@@ -580,6 +663,7 @@ async function createBot(
         openingPrompt(name, description),
         [],
         () => {},
+        "hide",
       );
       break;
     case engines.claude:
@@ -646,9 +730,16 @@ async function sendMessage(
     writeEvent(res, event);
   };
   try {
-    const stopReason = await runTurn(handler, botId, text, images, (update) => {
-      send({ event: "update", data: update });
-    });
+    const stopReason = await runTurn(
+      handler,
+      botId,
+      text,
+      images,
+      (update) => {
+        send({ event: "update", data: update });
+      },
+      "keep",
+    );
     send({ event: "done", data: { stopReason } });
     res.end();
   } catch (error) {
@@ -668,6 +759,9 @@ async function sendMessage(
  * Records the turn as running, then finished or failed, so a later read can
  * say what happened after the client has gone. The busy set is taken before
  * any wait, so two turns of one bot cannot overlap and two bots can.
+ * `said` keeps the message in the transcript as the person wrote it, so a chat
+ * shows it again later. The opening prompt and a schedule's prompt are the
+ * daemon's own and are not kept.
  */
 async function runTurn(
   handler: Handler,
@@ -675,6 +769,7 @@ async function runTurn(
   text: string,
   images: readonly AttachedImage[],
   onUpdate: (update: acp.SessionUpdate) => void,
+  said: "keep" | "hide",
 ): Promise<acp.StopReason> {
   const bot = handler.store.getBot(botId);
   if (bot.engine !== engines.opencode) {
@@ -684,8 +779,19 @@ async function runTurn(
     throw new HttpError(409, "This bot is already working on a turn.");
   }
   handler.busy.add(botId);
-  handler.turns.set(botId, { status: "running" });
   const thread = botConversation(handler.store, botId);
+  if (said === "keep") {
+    for (const update of userMessage(text, images)) {
+      handler.store.appendUpdate(thread.id, update);
+    }
+  }
+  handler.turns.set(botId, {
+    status: "running",
+    replyFrom: handler.store.countUpdates(thread.id),
+  });
+  const publish = (event: TurnEvent) => {
+    for (const listener of handler.followers.get(botId) ?? []) listener(event);
+  };
   // A text-only model is told where the file is. The bytes stay on disk.
   const prompt = modelReadsImages(handler.model)
     ? text
@@ -698,20 +804,35 @@ async function runTurn(
       (update) => {
         handler.store.appendUpdate(thread.id, update);
         onUpdate(update);
+        publish({ event: "update", data: update });
       },
       seen,
     );
     handler.turns.set(botId, { status: "finished", stopReason });
+    publish({ event: "done", data: { stopReason } });
     return stopReason;
   } catch (error) {
-    handler.turns.set(botId, {
-      status: "failed",
-      error: httpStatus(error).message,
-    });
+    const message = httpStatus(error).message;
+    handler.turns.set(botId, { status: "failed", error: message });
+    publish({ event: "error", data: { error: message } });
     throw error;
   } finally {
     handler.release(botId);
   }
+}
+
+/** The person's message as ACP user chunks: the text, then each image. */
+function userMessage(
+  text: string,
+  images: readonly AttachedImage[],
+): acp.SessionUpdate[] {
+  return [
+    { sessionUpdate: "user_message_chunk", content: { type: "text", text } },
+    ...images.map((image): acp.SessionUpdate => ({
+      sessionUpdate: "user_message_chunk",
+      content: { type: "image", mimeType: image.mimeType, data: image.data },
+    })),
+  ];
 }
 
 /**
@@ -726,9 +847,16 @@ async function runTurnWhenFree(
   for (;;) {
     if (handler.stopping()) throw new Error("The daemon is stopping.");
     try {
-      return await runTurn(handler, botId, text, [], () => {
-        // The update is already stored. A schedule has no open response.
-      });
+      return await runTurn(
+        handler,
+        botId,
+        text,
+        [],
+        () => {
+          // The update is already stored. A schedule has no open response.
+        },
+        "hide",
+      );
     } catch (error) {
       if (error instanceof HttpError && error.status === 409) {
         await handler.whenIdle(botId);
@@ -855,23 +983,18 @@ function attachedImages(value: unknown): AttachedImage[] {
     if (typeof mimeType !== "string" || typeof data !== "string") {
       throw new HttpError(400, "An image needs a type and base64 data.");
     }
+    if (!isImageMime(mimeType)) {
+      throw new HttpError(
+        400,
+        "An image needs a png, jpeg, gif, or webp type.",
+      );
+    }
     try {
       imageBytes({ mimeType, data });
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "An image is not valid.";
       throw new HttpError(400, message);
-    }
-    if (
-      mimeType !== "image/png" &&
-      mimeType !== "image/jpeg" &&
-      mimeType !== "image/gif" &&
-      mimeType !== "image/webp"
-    ) {
-      throw new HttpError(
-        400,
-        "An image needs a png, jpeg, gif, or webp type.",
-      );
     }
     return { mimeType, data };
   });

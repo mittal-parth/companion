@@ -12,13 +12,16 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc -p apps/daemon --noEmit && tsc -p packages/shared --noEmit && pnpm --filter @companion/web typecheck",
     "test": "vitest run",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "e2e": "pnpm --filter @companion/web build && pnpm exec playwright test",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm e2e",
     "smoke": "pnpm --filter @companion/web smoke",
     "acp-hello": "pnpm --filter @companion/daemon acp-hello"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "eslint": "^9",
     "prettier": "^3",
+    "tsx": "^4.23.15",
     "typescript": "^5",
     "typescript-eslint": "^8",
     "vitest": "^4"

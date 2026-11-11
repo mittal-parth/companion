@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./protocol": "./src/protocol.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.4.0",
