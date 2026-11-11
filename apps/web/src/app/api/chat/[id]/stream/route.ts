@@ -4,7 +4,7 @@
  * With nothing to replay and no turn running, the answer is 204.
  */
 import { connection } from "next/server";
-import { chatResponse, daemonFetch } from "@/lib/daemon";
+import { chatResponse, daemonError, daemonFetch } from "@/lib/daemon";
 
 export async function GET(
   request: Request,
@@ -21,15 +21,10 @@ export async function GET(
     return new Response(null, { status: 204 });
   }
   if (!daemon.ok || daemon.body == null) {
-    const body: unknown = await daemon.json().catch(() => undefined);
-    const error =
-      typeof body === "object" &&
-      body !== null &&
-      "error" in body &&
-      typeof body.error === "string"
-        ? body.error
-        : "The daemon failed.";
-    return Response.json({ error }, { status: daemon.status || 502 });
+    return Response.json(
+      { error: await daemonError(daemon) },
+      { status: daemon.status || 502 },
+    );
   }
   return chatResponse(daemon.body);
 }

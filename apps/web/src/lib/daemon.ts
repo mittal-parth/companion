@@ -1,6 +1,8 @@
 /**
- * The web app's calls to the local daemon.
- * The browser never talks to the daemon directly. These routes do.
+ * How the Next.js server calls the local daemon.
+ * The browser only talks to the chat routes. Those routes, and the page that
+ * loads the transcript, call the daemon's own HTTP API through here.
+ * A new daemon still gets its bot from the daemon's `POST /bots`.
  */
 import type * as acp from "@agentclientprotocol/sdk";
 import type {
@@ -11,16 +13,7 @@ import type {
 } from "@companion/shared";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import type { UIMessage } from "ai";
-import { createReplyStream } from "./messages";
-
-const imageTypes = [
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-] as const;
-
-type ImageType = (typeof imageTypes)[number];
+import { createReplyStream } from "./converter";
 
 /** Where the daemon is listening. Set for the web process, not the browser. */
 export function daemonUrl(): string {
@@ -112,7 +105,7 @@ async function createBot(name: string): Promise<BotView> {
     body: JSON.stringify({ name }),
   });
   if (!response.ok) {
-    throw new Error(await errorMessage(response));
+    throw new Error(await daemonError(response));
   }
   return (await response.json()) as BotView;
 }
@@ -120,7 +113,7 @@ async function createBot(name: string): Promise<BotView> {
 async function daemonJson<T>(path: string): Promise<T> {
   const response = await fetch(`${daemonUrl()}${path}`);
   if (!response.ok) {
-    throw new Error(await errorMessage(response));
+    throw new Error(await daemonError(response));
   }
   return (await response.json()) as T;
 }
@@ -133,7 +126,8 @@ export function daemonFetch(
   return fetch(`${daemonUrl()}${path}`, init);
 }
 
-async function errorMessage(response: Response): Promise<string> {
+/** The error text from a daemon response that was not a stream. */
+export async function daemonError(response: Response): Promise<string> {
   const body: unknown = await response.json().catch(() => undefined);
   if (
     typeof body === "object" &&
@@ -208,6 +202,10 @@ function isFailure(value: unknown): value is { error: string } {
   );
 }
 
+/**
+ * A browser file part is a data URL. The daemon stores the raw base64.
+ * The type has to be one of the shared image types, which is also what the daemon accepts.
+ */
 function imageFrom(mediaType: string, url: string): AttachedImage {
   const match = /^data:([^;,]+);base64,([A-Za-z0-9+/]+={0,2})$/.exec(url);
   const mimeType = match?.[1];
@@ -215,7 +213,7 @@ function imageFrom(mediaType: string, url: string): AttachedImage {
   if (
     mimeType == null ||
     data == null ||
-    !isImageType(mimeType) ||
+    !isImageMime(mimeType) ||
     (mimeType !== mediaType && mediaType !== "image")
   ) {
     throw new Error("An image needs a png, jpeg, gif, or webp type.");
@@ -223,6 +221,14 @@ function imageFrom(mediaType: string, url: string): AttachedImage {
   return { mimeType, data };
 }
 
-function isImageType(value: string): value is ImageType {
-  return (imageTypes as readonly string[]).includes(value);
+function isImageMime(value: string): value is AttachedImage["mimeType"] {
+  switch (value) {
+    case "image/png":
+    case "image/jpeg":
+    case "image/gif":
+    case "image/webp":
+      return true;
+    default:
+      return false;
+  }
 }

@@ -11,7 +11,7 @@ export default defineConfig({
   testMatch: live ? "chat.live.spec.ts" : "chat.spec.ts",
   fullyParallel: false,
   workers: 1,
-  timeout: live ? 180_000 : 60_000,
+  timeout: live ? 360_000 : 60_000,
   expect: { timeout: 15_000 },
   use: {
     baseURL: "http://127.0.0.1:3011",
@@ -25,9 +25,6 @@ export default defineConfig({
     reuseExistingServer: false,
     env: {
       ...process.env,
-      COMPANION_LIVE: process.env.COMPANION_LIVE ?? "",
-      SARVAM_API_KEY: process.env.SARVAM_API_KEY ?? "",
-      OPENCODE_BIN: process.env.OPENCODE_BIN ?? "",
       PORT: "3011",
     },
   },

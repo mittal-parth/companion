@@ -3,7 +3,12 @@
  * File parts become the images the daemon already knows how to store.
  */
 import { connection } from "next/server";
-import { chatResponse, daemonFetch, messageForDaemon } from "@/lib/daemon";
+import {
+  chatResponse,
+  daemonError,
+  daemonFetch,
+  messageForDaemon,
+} from "@/lib/daemon";
 import type { UIMessage } from "ai";
 
 export async function POST(request: Request) {
@@ -41,7 +46,7 @@ export async function POST(request: Request) {
   });
   if (!daemon.ok || daemon.body == null) {
     return Response.json(
-      { error: await failure(daemon) },
+      { error: await daemonError(daemon) },
       { status: daemon.status || 502 },
     );
   }
@@ -72,17 +77,4 @@ function messageField(body: unknown): UIMessage | undefined {
     return undefined;
   }
   return message as UIMessage;
-}
-
-async function failure(response: Response): Promise<string> {
-  const body: unknown = await response.json().catch(() => undefined);
-  if (
-    typeof body === "object" &&
-    body !== null &&
-    "error" in body &&
-    typeof body.error === "string"
-  ) {
-    return body.error;
-  }
-  return "The daemon failed.";
 }

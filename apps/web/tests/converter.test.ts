@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { RecordedSession } from "@companion/shared";
 import { expect, test } from "vitest";
-import { createReplyStream, transcriptToMessages } from "./messages";
+import { createReplyStream, transcriptToMessages } from "../src/lib/converter";
 
 const pixel =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -17,7 +17,7 @@ const fixture = JSON.parse(
   readFileSync(
     join(
       dirname(fileURLToPath(import.meta.url)),
-      "../../../daemon/fixtures/opencode-hello.json",
+      "../../daemon/fixtures/opencode-hello.json",
     ),
     "utf8",
   ),

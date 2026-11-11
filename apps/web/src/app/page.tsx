@@ -5,7 +5,7 @@
  */
 import { Chat } from "@/components/chat";
 import { ensureDefaultBot } from "@/lib/daemon";
-import { transcriptToMessages } from "@/lib/messages";
+import { transcriptToMessages } from "@/lib/converter";
 import type { UIMessage } from "ai";
 import { connection } from "next/server";
 

@@ -28,7 +28,7 @@ flowchart LR
   Daemon --> OpenCode["OpenCode over ACP"]
 ```
 
-`apps/web/src/lib/messages.ts` is the converter. `transcriptToMessages` reads a stored transcript: the person's chunks, including images, become a user message, and the reply that follows becomes the assistant message. Thought chunks are reasoning. Tool calls are dynamic tool parts, with a failed call shown as an error. Notices are text. Plan, usage, and the other session bookkeeping stay out of the chat. The switch over update kinds is exhaustive.
+`apps/web/src/lib/converter.ts` is the converter. `transcriptToMessages` reads a stored transcript: the person's chunks, including images, become a user message, and the reply that follows becomes the assistant message. Thought chunks are reasoning. Tool calls are dynamic tool parts, with a failed call shown as an error. Notices are text. Plan, usage, and the other session bookkeeping stay out of the chat. The switch over update kinds is exhaustive.
 
 `createReplyStream` does the same for one live turn. That stream is only the reply. The person's message is already on the page.
 
@@ -57,4 +57,4 @@ sequenceDiagram
 
 ## What the browser test covers
 
-`e2e/chat.spec.ts` starts the daemon with an engine that answers in two beats. The first beat is visible immediately. The rest waits until the test releases it. That is what makes a reload land in the middle of a turn. The cases send a message and see streamed markdown and a tool call, attach an image and check the daemon stored it, and reload before the turn finishes and then see it finish. `e2e/chat.live.spec.ts` asks OpenCode to reply with one word.
+`e2e/chat.spec.ts` starts the daemon with an engine that answers in two beats. The first beat is visible immediately. The rest waits until the test releases it. That is what makes a reload land in the middle of a turn. The cases send a message and see streamed markdown and a tool call, attach an image and check the daemon stored it, and reload before the turn finishes and then see it finish. `e2e/chat.live.spec.ts` runs the same app against OpenCode: the opening greeting is on the page, a reply streams, and a file read shows up as a tool card.
