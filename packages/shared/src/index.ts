@@ -45,11 +45,13 @@ export type BotView = Bot & {
  * The latest turn for a bot, as a client reads it back.
  * `idle` means none has run. `running` means the daemon is still in one,
  * whether or not a client is connected. `finished` and `failed` keep the
- * outcome after the stream has closed.
+ * outcome after the stream has closed. A running turn's `replyFrom` is the
+ * index of its first reply update in the transcript, after the person's own
+ * message, so a client that rejoins can show what came before and replay the rest.
  */
 export type TurnState =
   | { status: "idle" }
-  | { status: "running" }
+  | { status: "running"; replyFrom: number }
   | { status: "finished"; stopReason: acp.StopReason }
   | { status: "failed"; error: string };
 
@@ -58,16 +60,6 @@ export type BotTranscript = BotView & {
   updates: acp.SessionUpdate[];
   turn: TurnState;
 };
-
-/**
- * One server-sent event from a turn.
- * `update` is an ACP session update, in arrival order.
- * `done` is why the prompt stopped. `error` means the turn failed.
- */
-export type TurnEvent =
-  | { event: "update"; data: acp.SessionUpdate }
-  | { event: "done"; data: { stopReason: acp.StopReason } }
-  | { event: "error"; data: { error: string } };
 
 /**
  * One conversation. `updates` is the transcript, in the order the engine sent it.
@@ -108,16 +100,6 @@ export type ScheduleReceipt = {
 
 /** The user's decision on a sensitive action. */
 export type ApprovalDecision = "allow" | "deny";
-
-/**
- * A pasted image.
- * `data` is the file's base64, with no `data:` prefix, so a text-only model
- * can be handed a path instead of the bytes.
- */
-export type AttachedImage = {
-  mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
-  data: string;
-};
 
 /** A sensitive action waiting for the user. */
 export type Approval = {
@@ -243,6 +225,17 @@ export type ScheduleCommand =
   | { command: "delete"; id: string }
   | { command: "help" };
 
+export {
+  imageMimeTypes,
+  isImageMime,
+  maxImageBytes,
+  maxImagesPerMessage,
+  parseTurnEvent,
+  parseTurnEvents,
+  type AttachedImage,
+  type ImageMimeType,
+  type TurnEvent,
+} from "./protocol.js";
 export {
   nextRun,
   nextRuns,

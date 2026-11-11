@@ -6,3 +6,6 @@ coverage
 *.tsbuildinfo
 .pnpm-debug.log*
 .env
+test-results
+playwright-report
+blob-report

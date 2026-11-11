@@ -4,7 +4,7 @@
  */
 import { spawnSync } from "node:child_process";
 import type * as acp from "@agentclientprotocol/sdk";
-import type { BotView, TurnEvent } from "@companion/shared";
+import { parseTurnEvents, type BotView } from "@companion/shared";
 import { expect } from "vitest";
 import type { Daemon } from "../src/api.js";
 
@@ -73,34 +73,4 @@ export async function askBot(
 }
 
 /** Reads the server-sent events of one streamed turn. */
-export function parseEvents(body: string): TurnEvent[] {
-  const events: TurnEvent[] = [];
-  for (const block of body.split("\n\n")) {
-    if (block.trim() === "") continue;
-    let name = "";
-    const data: string[] = [];
-    for (const line of block.split("\n")) {
-      if (line.startsWith("event:")) name = line.slice("event:".length).trim();
-      if (line.startsWith("data:"))
-        data.push(line.slice("data:".length).trim());
-    }
-    const payload: unknown = JSON.parse(data.join("\n"));
-    if (name === "update") {
-      events.push({ event: "update", data: payload as acp.SessionUpdate });
-      continue;
-    }
-    if (name === "done") {
-      events.push({
-        event: "done",
-        data: payload as { stopReason: acp.StopReason },
-      });
-      continue;
-    }
-    if (name === "error") {
-      events.push({ event: "error", data: payload as { error: string } });
-      continue;
-    }
-    throw new Error(`Unexpected event ${name}.`);
-  }
-  return events;
-}
+export const parseEvents = parseTurnEvents;

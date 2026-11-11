@@ -16,7 +16,14 @@ import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
-import { engines, type AttachedImage } from "@companion/shared";
+import {
+  engines,
+  isImageMime,
+  maxImageBytes,
+  maxImagesPerMessage,
+  type AttachedImage,
+  type ImageMimeType,
+} from "@companion/shared";
 import type { ThreadStore } from "./thread-store.js";
 import { botConversation } from "./thread-store.js";
 import { approvalResponse } from "./approval.js";
@@ -92,10 +99,10 @@ export function watchTurnIdle(
   };
 }
 
-const maxImagesPerTurn = 4;
-const maxImageBytes = 5_000_000;
-
-const imageFiles = {
+const imageFiles: Record<
+  ImageMimeType,
+  { extension: string; matches: (bytes: Buffer) => boolean }
+> = {
   "image/png": {
     extension: "png",
     matches: (bytes: Buffer) =>
@@ -123,14 +130,11 @@ const imageFiles = {
       bytes.subarray(0, 4).toString("ascii") === "RIFF" &&
       bytes.subarray(8, 12).toString("ascii") === "WEBP",
   },
-} as const;
+};
 
 function imageKind(mimeType: string) {
-  if (mimeType === "image/png") return imageFiles["image/png"];
-  if (mimeType === "image/jpeg") return imageFiles["image/jpeg"];
-  if (mimeType === "image/gif") return imageFiles["image/gif"];
-  if (mimeType === "image/webp") return imageFiles["image/webp"];
-  return undefined;
+  if (!isImageMime(mimeType)) return undefined;
+  return imageFiles[mimeType];
 }
 
 /**
@@ -380,7 +384,7 @@ export function delegatePastedImages(
   images: readonly AttachedImage[],
 ): string {
   if (images.length === 0) return text;
-  if (images.length > maxImagesPerTurn) {
+  if (images.length > maxImagesPerMessage) {
     throw new Error("An image list is too long.");
   }
   const folder = join(directory, "images");
