@@ -82,6 +82,8 @@ export type ThreadStore = {
   attachSession(threadId: string, sessionId: string): void;
   /** Appends one session update, in the order the engine sent it. */
   appendUpdate(threadId: string, update: acp.SessionUpdate): void;
+  /** How many updates the transcript holds, so a turn can say where its reply starts. */
+  countUpdates(threadId: string): number;
   /** Reads a thread and its transcript back. */
   getThread(id: string): Thread;
   /** Lists threads without their transcripts. Omitting the bot lists them all. */
@@ -225,6 +227,9 @@ function store(db: DatabaseSync): ThreadStore {
   const selectUpdates = db.prepare(
     "SELECT body FROM updates WHERE thread_id = ? ORDER BY seq",
   );
+  const selectUpdateCount = db.prepare(
+    "SELECT COUNT(*) AS count FROM updates WHERE thread_id = ?",
+  );
   const insertSchedule = db.prepare(
     "INSERT INTO schedules (id, bot_id, body, created_at) VALUES (?, ?, ?, ?)",
   );
@@ -323,6 +328,11 @@ function store(db: DatabaseSync): ThreadStore {
       requireThread(threadId);
       // Sequence numbers keep the transcript in arrival order across a restart.
       insertUpdate.run(threadId, threadId, JSON.stringify(update));
+    },
+
+    countUpdates(threadId) {
+      requireThread(threadId);
+      return Number(selectUpdateCount.get(threadId)?.count ?? 0);
     },
 
     getThread(id) {

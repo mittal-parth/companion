@@ -45,11 +45,13 @@ export type BotView = Bot & {
  * The latest turn for a bot, as a client reads it back.
  * `idle` means none has run. `running` means the daemon is still in one,
  * whether or not a client is connected. `finished` and `failed` keep the
- * outcome after the stream has closed.
+ * outcome after the stream has closed. A running turn's `replyFrom` is the
+ * index of its first reply update in the transcript, after the person's own
+ * message, so a client that rejoins can show what came before and replay the rest.
  */
 export type TurnState =
   | { status: "idle" }
-  | { status: "running" }
+  | { status: "running"; replyFrom: number }
   | { status: "finished"; stopReason: acp.StopReason }
   | { status: "failed"; error: string };
 

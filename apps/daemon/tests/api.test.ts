@@ -108,7 +108,7 @@ test("a message streams session updates and stores them", async () => {
 
       const stored = await fetch(`${daemon.url}/bots/${bot.id}`);
       expect(await stored.json()).toMatchObject({
-        updates: [hello, second],
+        updates: [said("Say hello"), hello, said("Say it again"), second],
         turn: { status: "finished", stopReason: "end_turn" },
       });
     },
@@ -231,7 +231,7 @@ test("an engine failure is reported on the response", async () => {
     ]);
     const stored = await fetch(`${daemon.url}/bots/${bot.id}`);
     expect(await stored.json()).toMatchObject({
-      updates: [hello],
+      updates: [said("hello"), said("hello"), hello],
       turn: { status: "failed", error: "OpenCode stopped." },
     });
   });
@@ -306,15 +306,15 @@ test("a turn keeps running after the client disconnects", async () => {
       const during = (await (
         await fetch(`${daemon.url}/bots/${bot.id}`)
       ).json()) as BotTranscript;
-      expect(during.turn).toEqual({ status: "running" });
-      expect(during.updates).toEqual([hello, hello]);
+      expect(during.turn).toEqual({ status: "running", replyFrom: 2 });
+      expect(during.updates).toEqual([hello, said("keep going"), hello]);
       const refused = await postJson(daemon, `/bots/${bot.id}/messages`, {
         text: "second",
       });
       expect(refused.status).toBe(409);
       release();
       const after = await waitForTurn(daemon, bot.id, "finished");
-      expect(after.updates).toEqual([hello, hello, later]);
+      expect(after.updates).toEqual([hello, said("keep going"), hello, later]);
       expect(after.turn).toEqual({
         status: "finished",
         stopReason: "end_turn",
@@ -325,6 +325,109 @@ test("a turn keeps running after the client disconnects", async () => {
       await pending?.catch(() => undefined);
     }
   });
+});
+
+test("a client that rejoins a turn gets the reply so far, then the rest live", async () => {
+  let release: () => void = () => {};
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let started: () => void = () => {};
+  const running = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const later: acp.SessionUpdate = {
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "still going" },
+  };
+  const engine: Engine = {
+    async prompt(_botId, text, onUpdate) {
+      if (text.startsWith("Your name is")) return "end_turn";
+      onUpdate(hello);
+      started();
+      await hold;
+      onUpdate(later);
+      return "end_turn";
+    },
+    async close() {},
+  };
+  const controller = new AbortController();
+  let pending: Promise<Response> | undefined;
+  await withDaemon(engine, async (daemon) => {
+    try {
+      const bot = await createBot(daemon, "Content");
+      const before = await fetch(`${daemon.url}/bots/${bot.id}/events`);
+      expect(before.status).toBe(204);
+
+      pending = fetch(`${daemon.url}/bots/${bot.id}/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: "keep going" }),
+        signal: controller.signal,
+      });
+      await running;
+      controller.abort();
+      await pending.catch(() => undefined);
+
+      const joined = await fetch(`${daemon.url}/bots/${bot.id}/events`);
+      expect(joined.status).toBe(200);
+      expect(joined.headers.get("content-type")).toContain("text/event-stream");
+      release();
+      expect(parseEvents(await joined.text())).toEqual([
+        { event: "update", data: hello },
+        { event: "update", data: later },
+        { event: "done", data: { stopReason: "end_turn" } },
+      ]);
+
+      const replay = await fetch(`${daemon.url}/bots/${bot.id}/events?from=1`);
+      expect(parseEvents(await replay.text())).toEqual([
+        { event: "update", data: hello },
+        { event: "update", data: later },
+        { event: "done", data: { stopReason: "end_turn" } },
+      ]);
+      const caughtUp = await fetch(
+        `${daemon.url}/bots/${bot.id}/events?from=3`,
+      );
+      expect(caughtUp.status).toBe(204);
+      const bad = await fetch(`${daemon.url}/bots/${bot.id}/events?from=-1`);
+      expect(bad.status).toBe(400);
+    } finally {
+      release();
+      controller.abort();
+      await pending?.catch(() => undefined);
+    }
+  });
+});
+
+test("the person's message and images are kept in the transcript", async () => {
+  await withDaemon(
+    scripted([
+      { updates: [], stopReason: "end_turn" },
+      { updates: [hello], stopReason: "end_turn" },
+    ]),
+    async (daemon) => {
+      const bot = await createBot(daemon, "Look");
+      const response = await postJson(daemon, `/bots/${bot.id}/messages`, {
+        text: "What is this?",
+        images: [{ mimeType: "image/png", data: pixel }],
+      });
+      expect(parseEvents(await response.text())).toEqual([
+        { event: "update", data: hello },
+        { event: "done", data: { stopReason: "end_turn" } },
+      ]);
+      const stored = (await (
+        await fetch(`${daemon.url}/bots/${bot.id}`)
+      ).json()) as BotTranscript;
+      expect(stored.updates).toEqual([
+        said("What is this?"),
+        {
+          sessionUpdate: "user_message_chunk",
+          content: { type: "image", mimeType: "image/png", data: pixel },
+        },
+        hello,
+      ]);
+    },
+  );
 });
 
 test("two bots keep separate folders and opening turns", async () => {
@@ -557,6 +660,14 @@ test("an image of the wrong type is refused before a turn", async () => {
     },
   );
 });
+
+/** The update the daemon stores for a person's text. */
+function said(text: string): acp.SessionUpdate {
+  return {
+    sessionUpdate: "user_message_chunk",
+    content: { type: "text", text },
+  };
+}
 
 function readAccess(directory: string): ScheduleAccess {
   return JSON.parse(
