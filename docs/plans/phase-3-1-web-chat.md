@@ -7,13 +7,13 @@ Branch: `cursor/phase-3-1-web-chat-25ac`.
 - [x] Pull latest `main` and create the branch.
 - [x] Store the person's message, images included, as `user_message_chunk` updates. Only messages a person sends are stored. The opening prompt and schedule prompts are not, because `apps/daemon/tests/scheduler.test.ts` checks that a schedule's prompt stays out of the transcript. How schedules appear in a thread is left to 3.2.
 - [x] Add `GET /bots/:id/events?from=N`. It replays stored updates from `N`, defaulting to the running turn's `replyFrom`. If the turn is still running, it then follows it live. It ends with `done` or `error`. With nothing to replay and no turn running, it answers `204`. A running turn's `TurnState` is now `{ status: "running", replyFrom }`, the index of its first reply update after the person's message. Tests are in `apps/daemon/tests/api.test.ts`.
-- [ ] Switch shadcn to a Radix style, then install the AI SDK and the AI Elements components, which bring Streamdown.
-- [ ] Write the converter from ACP updates to AI SDK messages, for live updates and stored transcripts, with unit tests.
-- [ ] Add the `POST /api/chat` and `GET /api/chat/[id]/stream` routes that call the daemon.
-- [ ] Build the chat page: default bot, transcript loading, `useChat` with resume, image attachments.
-- [ ] Add Playwright tests against a fake agent (streaming, an attachment, a reload mid-turn), one live test, and the CI wiring.
-- [ ] Update `PLAN.md` and `AGENTS.md`, and write `docs/phase-3-1.md`.
-- [ ] At the end, send screenshots and a screen recording of the working chat.
+- [x] Switch shadcn to a Radix style, then install the AI SDK and the AI Elements components, which bring Streamdown.
+- [x] Write the converter from ACP updates to AI SDK messages, for live updates and stored transcripts, with unit tests.
+- [x] Add the `POST /api/chat` and `GET /api/chat/[id]/stream` routes that call the daemon.
+- [x] Build the chat page: default bot, transcript loading, `useChat` with resume, image attachments.
+- [x] Add Playwright tests against a fake agent (streaming, an attachment, a reload mid-turn), one live test, and the CI wiring.
+- [x] Update `PLAN.md` and `AGENTS.md`, and write `docs/phase-3-1.md`.
+- [x] At the end, send screenshots and a screen recording of the working chat.
 
 ### Notes for whoever continues
 

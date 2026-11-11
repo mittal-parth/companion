@@ -6,3 +6,4 @@
 - Verification via unit tests, e2e tests or evals for each change is important. Consider it done only after typechecks and running tests either by adding new tests, running existing tests or by performing the same via the browser / equivalent as an agent.
 - Have doc comments for methods and files focused on the purpose of the method. Don't focus too much on the technical tid bits but rather the purpose of the method.
 - Inline comments explaining the change at important points in the method are welcome. However, don't add incremental comments explaining the diff that just happened in that change. Remember, focus is on the overall purpose.
+- Prefer existing, maintained components and libraries (AI Elements, shadcn, the AI SDK) over writing our own, and customise them only lightly.

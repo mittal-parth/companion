@@ -4,5 +4,6 @@ packages:
 
 allowBuilds:
   agent-browser: false
+  esbuild: true
   sharp: false
   unrs-resolver: false
