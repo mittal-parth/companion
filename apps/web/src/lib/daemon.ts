@@ -1,16 +1,14 @@
 /**
- * How the Next.js server calls the local daemon.
- * The browser only talks to the chat routes. Those routes, and the page that
- * loads the transcript, call the daemon's own HTTP API through here.
- * A new daemon still gets its bot from the daemon's `POST /bots`.
+ * The Next.js server's client for the local daemon.
+ *
+ * The page loads the transcript. POST /api/chat sends a message. GET
+ * /api/chat/[id]/stream rejoins a turn that is still running. Those three
+ * callers all use this file. They call the daemon's existing /bots API.
+ * /api/health is the app's own health check, and it does not use this file.
  */
-import type * as acp from "@agentclientprotocol/sdk";
-import type {
-  AttachedImage,
-  BotTranscript,
-  BotView,
-  TurnEvent,
-} from "@companion/shared";
+import type { BotTranscript, BotView } from "@companion/shared";
+import { isImageMime, type AttachedImage } from "@companion/shared/image";
+import { parseTurnEvent, type TurnEvent } from "@companion/shared/turn-event";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import type { UIMessage } from "ai";
 import { createReplyStream } from "./converter";
@@ -140,71 +138,9 @@ export async function daemonError(response: Response): Promise<string> {
   return "The daemon failed.";
 }
 
-function parseTurnEvent(block: string): TurnEvent | undefined {
-  if (block.trim() === "") return undefined;
-  let name = "";
-  const data: string[] = [];
-  for (const line of block.split("\n")) {
-    const trimmed = line.endsWith("\r") ? line.slice(0, -1) : line;
-    if (trimmed.startsWith("event:")) {
-      name = trimmed.slice("event:".length).trim();
-    }
-    if (trimmed.startsWith("data:")) {
-      data.push(trimmed.slice("data:".length).trim());
-    }
-  }
-  const payload: unknown = JSON.parse(data.join("\n"));
-  switch (name) {
-    case "update":
-      if (!isUpdate(payload)) {
-        throw new Error("An update event needs a session update.");
-      }
-      return { event: "update", data: payload };
-    case "done":
-      if (!isDone(payload)) {
-        throw new Error("A done event needs a stop reason.");
-      }
-      return { event: "done", data: payload };
-    case "error":
-      if (!isFailure(payload)) {
-        throw new Error("An error event needs a message.");
-      }
-      return { event: "error", data: payload };
-    default:
-      throw new Error(`Unexpected event ${name}.`);
-  }
-}
-
-function isUpdate(value: unknown): value is acp.SessionUpdate {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "sessionUpdate" in value &&
-    typeof value.sessionUpdate === "string"
-  );
-}
-
-function isDone(value: unknown): value is { stopReason: acp.StopReason } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "stopReason" in value &&
-    typeof value.stopReason === "string"
-  );
-}
-
-function isFailure(value: unknown): value is { error: string } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "error" in value &&
-    typeof value.error === "string"
-  );
-}
-
 /**
- * A browser file part is a data URL. The daemon stores the raw base64.
- * The type has to be one of the shared image types, which is also what the daemon accepts.
+ * A browser file part is a data URL. The daemon stores the raw base64 and
+ * checks the type again with isImageMime.
  */
 function imageFrom(mediaType: string, url: string): AttachedImage {
   const match = /^data:([^;,]+);base64,([A-Za-z0-9+/]+={0,2})$/.exec(url);
@@ -219,16 +155,4 @@ function imageFrom(mediaType: string, url: string): AttachedImage {
     throw new Error("An image needs a png, jpeg, gif, or webp type.");
   }
   return { mimeType, data };
-}
-
-function isImageMime(value: string): value is AttachedImage["mimeType"] {
-  switch (value) {
-    case "image/png":
-    case "image/jpeg":
-    case "image/gif":
-    case "image/webp":
-      return true;
-    default:
-      return false;
-  }
 }

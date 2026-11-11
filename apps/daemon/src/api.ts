@@ -19,6 +19,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 import {
   engineNames,
   engines,
+  isImageMime,
   nextRun,
   type AttachedImage,
   type Bot,
@@ -982,23 +983,18 @@ function attachedImages(value: unknown): AttachedImage[] {
     if (typeof mimeType !== "string" || typeof data !== "string") {
       throw new HttpError(400, "An image needs a type and base64 data.");
     }
+    if (!isImageMime(mimeType)) {
+      throw new HttpError(
+        400,
+        "An image needs a png, jpeg, gif, or webp type.",
+      );
+    }
     try {
       imageBytes({ mimeType, data });
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "An image is not valid.";
       throw new HttpError(400, message);
-    }
-    if (
-      mimeType !== "image/png" &&
-      mimeType !== "image/jpeg" &&
-      mimeType !== "image/gif" &&
-      mimeType !== "image/webp"
-    ) {
-      throw new HttpError(
-        400,
-        "An image needs a png, jpeg, gif, or webp type.",
-      );
     }
     return { mimeType, data };
   });

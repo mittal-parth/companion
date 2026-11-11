@@ -13,12 +13,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
-import type {
-  AttachedImage,
-  BotTranscript,
-  BotView,
-  ScheduleAccess,
-  TurnEvent,
+import {
+  parseTurnEvents,
+  type AttachedImage,
+  type BotTranscript,
+  type BotView,
+  type ScheduleAccess,
+  type TurnEvent,
 } from "@companion/shared";
 import { expect, test } from "vitest";
 import { startDaemon, openingPrompt, type Daemon } from "../src/api.js";
@@ -373,14 +374,14 @@ test("a client that rejoins a turn gets the reply so far, then the rest live", a
       expect(joined.status).toBe(200);
       expect(joined.headers.get("content-type")).toContain("text/event-stream");
       release();
-      expect(parseEvents(await joined.text())).toEqual([
+      expect(parseTurnEvents(await joined.text())).toEqual([
         { event: "update", data: hello },
         { event: "update", data: later },
         { event: "done", data: { stopReason: "end_turn" } },
       ]);
 
       const replay = await fetch(`${daemon.url}/bots/${bot.id}/events?from=1`);
-      expect(parseEvents(await replay.text())).toEqual([
+      expect(parseTurnEvents(await replay.text())).toEqual([
         { event: "update", data: hello },
         { event: "update", data: later },
         { event: "done", data: { stopReason: "end_turn" } },
@@ -411,7 +412,7 @@ test("the person's message and images are kept in the transcript", async () => {
         text: "What is this?",
         images: [{ mimeType: "image/png", data: pixel }],
       });
-      expect(parseEvents(await response.text())).toEqual([
+      expect(parseTurnEvents(await response.text())).toEqual([
         { event: "update", data: hello },
         { event: "done", data: { stopReason: "end_turn" } },
       ]);
@@ -742,7 +743,7 @@ async function readTurn(
   const response = await postJson(daemon, `/bots/${botId}/messages`, { text });
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toContain("text/event-stream");
-  return parseEvents(await response.text());
+  return parseTurnEvents(await response.text());
 }
 
 function postJson(
@@ -755,37 +756,4 @@ function postJson(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-}
-
-function parseEvents(body: string): TurnEvent[] {
-  const events: TurnEvent[] = [];
-  for (const block of body.split("\n\n")) {
-    if (block.trim() === "") continue;
-    let name = "";
-    const data: string[] = [];
-    for (const line of block.split("\n")) {
-      if (line.startsWith("event:")) name = line.slice("event:".length).trim();
-      if (line.startsWith("data:"))
-        data.push(line.slice("data:".length).trim());
-    }
-    const payload: unknown = JSON.parse(data.join("\n"));
-    events.push(turnEvent(name, payload));
-  }
-  return events;
-}
-
-function turnEvent(name: string, data: unknown): TurnEvent {
-  switch (name) {
-    case "update":
-      return { event: "update", data: data as acp.SessionUpdate };
-    case "done":
-      return {
-        event: "done",
-        data: data as { stopReason: acp.StopReason },
-      };
-    case "error":
-      return { event: "error", data: data as { error: string } };
-    default:
-      throw new Error(`Unexpected event ${name}.`);
-  }
 }

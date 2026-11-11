@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./image": "./src/image.ts",
+    "./turn-event": "./src/turn-event.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.4.0",

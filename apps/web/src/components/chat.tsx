@@ -42,14 +42,17 @@ import {
   ToolOutput,
 } from "@/components/ai-elements/tool";
 import { useChat } from "@ai-sdk/react";
+import {
+  imageMimeTypes,
+  maxImageBytes,
+  maxImagesPerMessage,
+} from "@companion/shared/image";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { PaperclipIcon, XIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
-/** The daemon accepts these images, at most four, and at most 5 MB each. */
-const imageAccept = "image/png,image/jpeg,image/gif,image/webp";
-const maxImages = 4;
-const maxImageBytes = 5_000_000;
+/** The same image limits the daemon stores, offered by the file picker. */
+const imageAccept = imageMimeTypes.join(",");
 
 export function Chat({
   botId,
@@ -130,7 +133,7 @@ export function Chat({
         <PromptInput
           accept={imageAccept}
           maxFileSize={maxImageBytes}
-          maxFiles={maxImages}
+          maxFiles={maxImagesPerMessage}
           multiple
           onError={(reason) => setFormError(reason.message)}
           onSubmit={(message) => {

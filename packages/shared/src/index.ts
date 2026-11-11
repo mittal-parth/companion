@@ -62,16 +62,6 @@ export type BotTranscript = BotView & {
 };
 
 /**
- * One server-sent event from a turn.
- * `update` is an ACP session update, in arrival order.
- * `done` is why the prompt stopped. `error` means the turn failed.
- */
-export type TurnEvent =
-  | { event: "update"; data: acp.SessionUpdate }
-  | { event: "done"; data: { stopReason: acp.StopReason } }
-  | { event: "error"; data: { error: string } };
-
-/**
  * One conversation. `updates` is the transcript, in the order the engine sent it.
  * `engine`, `sessionId`, and `cwd` are what a restart uses to start that engine
  * and call `session/load`. `sessionId` is empty until the engine has a session.
@@ -110,16 +100,6 @@ export type ScheduleReceipt = {
 
 /** The user's decision on a sensitive action. */
 export type ApprovalDecision = "allow" | "deny";
-
-/**
- * A pasted image.
- * `data` is the file's base64, with no `data:` prefix, so a text-only model
- * can be handed a path instead of the bytes.
- */
-export type AttachedImage = {
-  mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
-  data: string;
-};
 
 /** A sensitive action waiting for the user. */
 export type Approval = {
@@ -214,6 +194,19 @@ export type ScheduleCommand =
   | { command: "delete"; id: string }
   | { command: "help" };
 
+export {
+  imageMimeTypes,
+  isImageMime,
+  maxImageBytes,
+  maxImagesPerMessage,
+  type AttachedImage,
+  type ImageMimeType,
+} from "./image.js";
+export {
+  parseTurnEvent,
+  parseTurnEvents,
+  type TurnEvent,
+} from "./turn-event.js";
 export {
   nextRun,
   nextRuns,
