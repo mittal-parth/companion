@@ -96,6 +96,16 @@ export type ScheduleReceipt = {
 /** The user's decision on a sensitive action. */
 export type ApprovalDecision = "allow" | "deny";
 
+/**
+ * A pasted image.
+ * `data` is the file's base64, with no `data:` prefix, so a text-only model
+ * can be handed a path instead of the bytes.
+ */
+export type AttachedImage = {
+  mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  data: string;
+};
+
 /** A sensitive action waiting for the user. */
 export type Approval = {
   sessionId: string;

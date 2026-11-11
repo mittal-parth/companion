@@ -3,15 +3,20 @@
  * The rules tell every bot to read and update its own files. They are not
  * those files.
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
+import type { AttachedImage } from "@companion/shared";
 import {
   defaultOpencodeModel,
+  delegatePastedImages,
+  imageBytes,
   installOpencodeConfig,
   standingInstructions,
+  visionAgentId,
+  visionOpencodeModel,
 } from "./engine.js";
 
 test("the standing rules name each bot's instructions and memory", () => {
@@ -21,7 +26,11 @@ test("the standing rules name each bot's instructions and memory", () => {
   expect(text).toContain("The copies on disk are the latest.");
   expect(text).toContain("search the web and cite the pages");
   expect(text).toContain("load the schedules skill");
+  expect(text).toContain("ask the vision subagent");
   expect(text).not.toContain("SARVAM_API_KEY");
+  expect(standingInstructions(visionOpencodeModel)).not.toContain(
+    "vision subagent",
+  );
 });
 
 test("installing the config writes the rules beside the model file", () => {
@@ -35,19 +44,56 @@ test("installing the config writes the rules beside the model file", () => {
       websearch: { provider: string };
       permissions: { action: string; resource: string; effect: string }[];
       policies: { action: string; resource: string; effect: string }[];
+      agents: {
+        vision: {
+          mode: string;
+          model: string;
+          steps: number;
+          permissions: { action: string; resource: string; effect: string }[];
+        };
+      };
+      providers: {
+        sarvam: {
+          models: {
+            "glm5.3": { modalities: { input: string[] }; attachment?: boolean };
+            "glm5.3-flash": {
+              modalities: { input: string[] };
+              attachment?: boolean;
+            };
+          };
+        };
+      };
     };
     expect(config.model).toBe(defaultOpencodeModel);
     expect(config.websearch).toEqual({ provider: "random" });
     expect(config.permissions).toEqual([
       { action: "websearch", resource: "*", effect: "allow" },
+      { action: "subagent", resource: visionAgentId, effect: "allow" },
     ]);
+    expect(config.agents.vision.mode).toBe("subagent");
+    expect(config.agents.vision.model).toBe(visionOpencodeModel);
+    expect(config.agents.vision.steps).toBe(6);
+    expect(config.agents.vision.permissions).toEqual([
+      { action: "*", resource: "*", effect: "deny" },
+      { action: "read", resource: "*", effect: "allow" },
+    ]);
+    expect(config.providers.sarvam.models["glm5.3"].modalities.input).toEqual([
+      "text",
+    ]);
+    expect(
+      config.providers.sarvam.models["glm5.3-flash"].modalities.input,
+    ).toEqual(["text", "image"]);
+    expect(config.providers.sarvam.models["glm5.3"].attachment).toBeUndefined();
+    expect(config.providers.sarvam.models["glm5.3-flash"].attachment).toBe(
+      true,
+    );
     expect(config.policies).toEqual([
       { action: "websearch.use", resource: "firecrawl", effect: "deny" },
       { action: "websearch.use", resource: "tavily", effect: "deny" },
       { action: "websearch.use", resource: "opencode", effect: "deny" },
     ]);
     expect(readFileSync(join(directory, "opencode", "AGENTS.md"), "utf8")).toBe(
-      standingInstructions(),
+      standingInstructions(defaultOpencodeModel),
     );
     const skill = fileURLToPath(
       new URL("../skills/schedules/SKILL.md", import.meta.url),
@@ -64,6 +110,71 @@ test("installing the config writes the rules beside the model file", () => {
         readFileSync(join(directory, "opencode", "opencode.json"), "utf8"),
       ).not.toContain(key);
     }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+const pixel =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+test("a model that already sees gets no vision subagent", () => {
+  const directory = mkdtempSync(join(tmpdir(), "companion-opencode-see-"));
+  try {
+    installOpencodeConfig(directory, visionOpencodeModel);
+    const config = JSON.parse(
+      readFileSync(join(directory, "opencode", "opencode.json"), "utf8"),
+    ) as { model: string; agents?: unknown; permissions: unknown };
+    expect(config.model).toBe(visionOpencodeModel);
+    expect(config.agents).toBeUndefined();
+    expect(config.permissions).toEqual([
+      { action: "websearch", resource: "*", effect: "allow" },
+    ]);
+    expect(readFileSync(join(directory, "opencode", "AGENTS.md"), "utf8")).toBe(
+      standingInstructions(visionOpencodeModel),
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a pasted image becomes a path and the prompt keeps no bytes", () => {
+  const directory = mkdtempSync(join(tmpdir(), "companion-image-"));
+  const image: AttachedImage = { mimeType: "image/png", data: pixel };
+  try {
+    const prompt = delegatePastedImages(directory, "What is this?", [image]);
+    const names = readdirSync(join(directory, "images"));
+    expect(names).toHaveLength(1);
+    const saved = join(directory, "images", names[0] ?? "");
+    expect(prompt).toContain("What is this?");
+    expect(prompt).toContain(saved);
+    expect(prompt).toContain("vision subagent");
+    expect(prompt).not.toContain(pixel);
+    expect(readFileSync(saved)).toEqual(imageBytes(image));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an image whose bytes do not match its type is refused", () => {
+  expect(() => imageBytes({ mimeType: "image/jpeg", data: pixel })).toThrow(
+    /do not match/,
+  );
+});
+
+test("more images than one turn can hold are refused", () => {
+  const directory = mkdtempSync(join(tmpdir(), "companion-images-"));
+  const image: AttachedImage = { mimeType: "image/png", data: pixel };
+  try {
+    expect(() =>
+      delegatePastedImages(directory, "Look", [
+        image,
+        image,
+        image,
+        image,
+        image,
+      ]),
+    ).toThrow(/too long/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
