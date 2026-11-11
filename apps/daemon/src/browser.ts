@@ -1,11 +1,12 @@
 /**
  * The one Chrome every bot shares.
  *
- * The daemon starts a virtual display, a light window manager and a headed
- * Chrome with one persistent profile, so a login made by one bot is there for
- * the others and survives a restart. Chrome allows one process per profile, so
- * bots share that process and each works in its own window (see browser-cli.ts).
- * Nothing starts until a bot first asks, and everything stops with the daemon.
+ * The daemon starts a headed Chrome with one persistent profile on the shared
+ * display, so a login made by one bot is there for the others and survives a
+ * restart. Chrome allows one process per profile, so bots share that process
+ * and each works in its own window (see browser-cli.ts). Nothing starts until
+ * a bot first asks, and Chrome stops with the daemon. The display stays up for
+ * desktop apps when this host did not start it.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -17,8 +18,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import type { Readable } from "node:stream";
 import type { BrowserEndpoint } from "@companion/shared";
+import {
+  createDisplayHost,
+  reapLeftovers,
+  type DisplayHost,
+} from "./display.js";
 import { exited, stopChild } from "./engine.js";
 
 /** Hands out the shared Chrome's address, starting it on first use. */
@@ -38,11 +43,17 @@ export type BrowserHost = {
 export type BrowserHostOptions = {
   /** Holds the Chrome profile, which is kept between runs. */
   directory: string;
+  /**
+   * The screen Chrome draws on. When omitted, this host starts its own and
+   * stops it on close. The daemon passes the shared one, which desktop apps
+   * use as well.
+   */
+  display?: DisplayHost;
   /** Defaults to `COMPANION_CHROME`, then `google-chrome`. */
   chromeBin?: string;
   xvfbBin?: string;
   openboxBin?: string;
-  /** Size of the virtual screen, as `WIDTHxHEIGHTxDEPTH`. */
+  /** Size of the virtual screen, as `WIDTHxHEIGHTxDEPTH`. Used for a private display only. */
   screen?: string;
 };
 
@@ -50,14 +61,10 @@ type Running = {
   port: number;
   generation: string;
   chrome: ChildProcess;
-  helpers: ChildProcess[];
 };
 
 /** Chrome flushes its profile on SIGTERM, so it gets longer than a helper. */
 const chromeGraceMs = 8000;
-
-/** What a leftover process from a crashed daemon has to look like to be killed. */
-type Leftover = { pid: number; name: string };
 
 /**
  * Creates the host. No process starts until `endpoint()` is first called.
@@ -66,6 +73,15 @@ type Leftover = { pid: number; name: string };
 export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
   const profile = join(options.directory, "chrome-profile");
   const stateFile = join(options.directory, "host.json");
+  const ownsDisplay = options.display === undefined;
+  const display =
+    options.display ??
+    createDisplayHost({
+      directory: join(options.directory, "display"),
+      xvfbBin: options.xvfbBin,
+      openboxBin: options.openboxBin,
+      screen: options.screen,
+    });
   let current: Running | undefined;
   let starting: Promise<Running> | undefined;
   let closed = false;
@@ -76,10 +92,6 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     await cdpCall(running.port, "Browser.close", {}).catch(() => undefined);
     await exited(running.chrome, chromeGraceMs);
     stopChild(running.chrome);
-    for (const helper of [...running.helpers].reverse()) {
-      stopChild(helper);
-      await exited(helper);
-    }
     rmSync(stateFile, { force: true });
   }
 
@@ -96,34 +108,15 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       rmSync(join(profile, name), { force: true });
     }
 
-    const helpers: ChildProcess[] = [];
+    let chrome: ChildProcess | undefined;
     try {
-      const xvfb = spawn(
-        options.xvfbBin ?? "Xvfb",
-        [
-          "-displayfd",
-          "3",
-          "-screen",
-          "0",
-          options.screen ?? "1920x1080x24",
-          "-nolisten",
-          "tcp",
-        ],
-        { stdio: ["ignore", "ignore", "ignore", "pipe"], detached: true },
-      );
-      helpers.push(xvfb);
-      const display = await displayNumber(xvfb);
-      const env = { ...process.env, DISPLAY: display };
-
-      const openbox = spawn(options.openboxBin ?? "openbox", [], {
-        env,
-        stdio: "ignore",
-        detached: true,
-      });
-      helpers.push(openbox);
-      await started(openbox, "Openbox");
-
-      const chrome = spawn(
+      const screen = await display.endpoint();
+      const env = {
+        ...process.env,
+        DISPLAY: screen.display,
+        DBUS_SESSION_BUS_ADDRESS: screen.dbusAddress,
+      };
+      chrome = spawn(
         options.chromeBin ?? process.env.COMPANION_CHROME ?? "google-chrome",
         [
           `--user-data-dir=${profile}`,
@@ -134,6 +127,8 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
           "--password-store=basic",
           "--hide-crash-restore-bubble",
           "--window-size=1280,900",
+          // Lets the desktop accessibility tree see Chrome when a bot asks.
+          "--force-renderer-accessibility",
           // Bots' windows overlap on one screen. Without these, Chrome treats
           // a covered window as hidden and stalls its clicks and timers.
           "--disable-backgrounding-occluded-windows",
@@ -145,7 +140,6 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
         ],
         { env, stdio: "ignore", detached: true },
       );
-      helpers.push(chrome);
       await started(chrome, "Chrome");
       const port = await debuggingPort(profile, chrome);
 
@@ -154,18 +148,14 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
         stateFile,
         JSON.stringify({
           generation,
-          processes: [
-            { pid: xvfb.pid, name: "Xvfb" },
-            { pid: openbox.pid, name: "openbox" },
-            { pid: chrome.pid, name: "chrome" },
-          ],
+          processes: [{ pid: chrome.pid, name: "chrome" }],
         }),
       );
-      return { port, generation, chrome, helpers: helpers.slice(0, 2) };
+      return { port, generation, chrome };
     } catch (error) {
-      for (const helper of [...helpers].reverse()) {
-        stopChild(helper);
-        await exited(helper);
+      if (chrome !== undefined) {
+        stopChild(chrome);
+        await exited(chrome);
       }
       throw error;
     }
@@ -222,40 +212,9 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       const running = current;
       current = undefined;
       if (running !== undefined) await stopRunning(running);
+      if (ownsDisplay) await display.close();
     },
   };
-}
-
-/** Reads the display number Xvfb picks and prints to the pipe it was given. */
-async function displayNumber(xvfb: ChildProcess): Promise<string> {
-  const pipe = xvfb.stdio[3] as Readable | null | undefined;
-  if (pipe === null || pipe === undefined) {
-    throw new Error("Xvfb did not open its display pipe.");
-  }
-  return new Promise<string>((resolve, reject) => {
-    let text = "";
-    const timer = setTimeout(() => {
-      reject(new Error("Xvfb did not report a display. Is it installed?"));
-    }, 10_000);
-    pipe.on("data", (chunk: Buffer) => {
-      text += chunk.toString("utf8");
-      const line = text.split("\n")[0] ?? "";
-      if (text.includes("\n") && /^\d+$/.test(line.trim())) {
-        clearTimeout(timer);
-        resolve(`:${line.trim()}`);
-      }
-    });
-    xvfb.once("error", (error) => {
-      clearTimeout(timer);
-      reject(new Error(`Xvfb could not start: ${error.message}`));
-    });
-    xvfb.once("exit", (code) => {
-      clearTimeout(timer);
-      reject(
-        new Error(`Xvfb exited (${code ?? "signal"}) before it was ready.`),
-      );
-    });
-  });
 }
 
 /** Resolves once the process exists, and fails if the program is missing. */
@@ -346,53 +305,6 @@ async function answers(port: number): Promise<boolean> {
       signal: AbortSignal.timeout(2000),
     });
     return response.ok;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Stops the processes a daemon that crashed left running.
- * A pid is only killed when it still looks like the program recorded for it,
- * because the number may have been given to something else since.
- */
-async function reapLeftovers(stateFile: string): Promise<void> {
-  if (!existsSync(stateFile)) return;
-  let leftovers: Leftover[] = [];
-  try {
-    const parsed = JSON.parse(readFileSync(stateFile, "utf8")) as {
-      processes?: Leftover[];
-    };
-    leftovers = parsed.processes ?? [];
-  } catch {
-    // An unreadable record names nothing to stop.
-  }
-  rmSync(stateFile, { force: true });
-  for (const { pid, name } of leftovers) {
-    if (!looksLike(pid, name)) continue;
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      continue;
-    }
-  }
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-  for (const { pid, name } of leftovers) {
-    if (looksLike(pid, name)) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // It stopped on its own.
-      }
-    }
-  }
-}
-
-/** True when `pid` is a live process whose command line names `name`. */
-function looksLike(pid: number, name: string): boolean {
-  try {
-    const command = readFileSync(`/proc/${pid}/cmdline`, "utf8");
-    return command.toLowerCase().includes(name.toLowerCase());
   } catch {
     return false;
   }
