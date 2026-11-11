@@ -209,19 +209,31 @@ test("the live check accepts a vision read of the saved file", () => {
   }
 });
 
-test("the live check rejects a turn that decodes the image another way", () => {
-  const directory = mkdtempSync(join(tmpdir(), "companion-vision-other-"));
+test("an extra tool still counts when the vision subagent read the file", () => {
+  const directory = mkdtempSync(join(tmpdir(), "companion-vision-extra-"));
   const path = join(directory, "images", "code.png");
   mkdirSync(join(directory, "images"));
   writeFileSync(path, Buffer.from("png-bytes"));
   try {
     const shell = tool("shell", { command: "python decode.py" });
-    expect(() =>
-      visionReadPath([shell, ...visionTurn(path)], directory),
-    ).toThrow(/only the vision subagent/);
+    expect(visionReadPath([shell, ...visionTurn(path)], directory)).toBe(path);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the live check rejects a turn that never asks the vision subagent", () => {
+  const directory = mkdtempSync(join(tmpdir(), "companion-vision-other-"));
+  const path = join(directory, "images", "code.png");
+  mkdirSync(join(directory, "images"));
+  writeFileSync(path, Buffer.from("png-bytes"));
+  try {
     const other = tool("subagent", { agent: "explore", prompt: path });
-    expect(() => visionReadPath([other], directory)).toThrow(
-      /only the vision subagent/,
+    const read = tool("read", { path }, [{ path }], {
+      "opencode/child-session": { depth: 1 },
+    });
+    expect(() => visionReadPath([other, read], directory)).toThrow(
+      /did not read/,
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -327,36 +339,23 @@ type SeenCall = {
 
 /**
  * The file the vision subagent was asked to read.
- * The parent may launch only that subagent, and the subagent may only read this file.
+ * Other tool calls are allowed. The turn still has to ask vision, and a child read has to open this file.
  */
 function visionReadPath(
   updates: readonly acp.SessionUpdate[],
   directory: string,
 ): string {
   const calls = seenCalls(updates);
-  const parent = calls.filter((call) => !call.child);
-  const names = parent.map((call) => call.name ?? "unknown").join(", ");
-  if (
-    parent.length === 0 ||
-    parent.some(
+  const asked = calls
+    .filter(
       (call) =>
-        call.name !== "subagent" || inputAgent(call.rawInput) !== visionAgentId,
+        !call.child &&
+        call.name === "subagent" &&
+        inputAgent(call.rawInput) === visionAgentId,
     )
-  ) {
-    throw new Error(
-      `The parent may use only the vision subagent. It used: ${names || "no tools"}.`,
-    );
-  }
-  const asked = parent
-    .map((call) => inputPrompt(call.rawInput))
-    .filter((prompt) => prompt.includes(`${directory}/images/`));
-  const child = calls.filter((call) => call.child);
-  if (child.some((call) => call.name !== "read")) {
-    throw new Error(
-      `The vision subagent may only read the file. It used: ${child.map((call) => call.name ?? "unknown").join(", ")}.`,
-    );
-  }
-  const read = child
+    .map((call) => inputPrompt(call.rawInput));
+  const read = calls
+    .filter((call) => call.child && call.name === "read")
     .map((call) => callPath(call))
     .find(
       (path) =>
