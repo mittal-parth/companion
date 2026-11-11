@@ -30,6 +30,7 @@ test("the standing rules name each bot's instructions and memory", () => {
   expect(text).toContain("The copies on disk are the latest.");
   expect(text).toContain("search the web and cite the pages");
   expect(text).toContain("load the schedules skill");
+  expect(text).toContain("load the browser skill");
   expect(text).toContain("ask the vision subagent");
   expect(text).not.toContain("SARVAM_API_KEY");
   expect(standingInstructions(visionOpencodeModel)).not.toContain(
@@ -72,6 +73,7 @@ test("installing the config writes the rules beside the model file", () => {
     expect(config.websearch).toEqual({ provider: "random" });
     expect(config.permissions).toEqual([
       { action: "websearch", resource: "*", effect: "allow" },
+      { action: "shell", resource: "browser *", effect: "allow" },
       { action: "subagent", resource: visionAgentId, effect: "allow" },
     ]);
     expect(config.agents.vision.mode).toBe("subagent");
@@ -95,6 +97,20 @@ test("installing the config writes the rules beside the model file", () => {
       { action: "websearch.use", resource: "firecrawl", effect: "deny" },
       { action: "websearch.use", resource: "tavily", effect: "deny" },
       { action: "websearch.use", resource: "opencode", effect: "deny" },
+      ...[
+        "agent-browser *",
+        "npx agent-browser *",
+        "playwright-cli *",
+        "npx playwright *",
+        "google-chrome *",
+        "chromium *",
+        "chromium-browser *",
+        "chrome *",
+      ].map((command) => ({
+        action: "tool.use",
+        resource: `shell:${command}`,
+        effect: "deny",
+      })),
     ]);
     expect(readFileSync(join(directory, "opencode", "AGENTS.md"), "utf8")).toBe(
       standingInstructions(defaultOpencodeModel),
@@ -203,6 +219,7 @@ test("a model that already sees gets no vision subagent", () => {
     expect(config.agents).toBeUndefined();
     expect(config.permissions).toEqual([
       { action: "websearch", resource: "*", effect: "allow" },
+      { action: "shell", resource: "browser *", effect: "allow" },
     ]);
     expect(readFileSync(join(directory, "opencode", "AGENTS.md"), "utf8")).toBe(
       standingInstructions(visionOpencodeModel),

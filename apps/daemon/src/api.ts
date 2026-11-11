@@ -24,6 +24,7 @@ import {
   type Bot,
   type BotTranscript,
   type BotView,
+  type BrowserLease,
   type EngineName,
   type Schedule,
   type ScheduleAccess,
@@ -33,6 +34,7 @@ import {
   type TurnEvent,
   type TurnState,
 } from "@companion/shared";
+import { createBrowserHost, type BrowserHost } from "./browser.js";
 import {
   defaultOpencodeModel,
   delegatePastedImages,
@@ -81,6 +83,8 @@ export type DaemonOptions = {
   model?: string;
   /** Receives each schedule event. Defaults to one JSON line per event on stderr. */
   log?: (entry: ScheduleLogEntry) => void;
+  /** The shared Chrome. Defaults to one that keeps its profile beside the database. */
+  browser?: BrowserHost;
 };
 
 /**
@@ -108,6 +112,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     throw error;
   }
 
+  const browser =
+    options.browser ?? createBrowserHost({ directory: join(root, "browser") });
   const busy = new Set<string>();
   const turns = new Map<string, TurnState>();
   const idleWaiters = new Map<string, Array<() => void>>();
@@ -148,6 +154,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     whenIdle,
     release,
     stopping: () => stopping,
+    browser,
     access: { url: "", tokens: new Map() },
     scheduler: () => {
       if (schedulerHolder.current === undefined) {
@@ -176,12 +183,14 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     });
   } catch (error) {
     await engine.close();
+    await browser.close();
     store.close();
     throw error;
   }
   const address = server.address();
   if (address === null || typeof address === "string") {
     await engine.close();
+    await browser.close();
     store.close();
     throw new Error("The daemon did not bind a local port.");
   }
@@ -230,7 +239,11 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       try {
         await engine.close();
       } finally {
-        store.close();
+        try {
+          await browser.close();
+        } finally {
+          store.close();
+        }
       }
     },
   };
@@ -251,6 +264,8 @@ type Handler = {
   whenIdle(botId: string): Promise<void>;
   release(botId: string): void;
   stopping(): boolean;
+  /** The Chrome every bot's `browser` command shares. */
+  browser: BrowserHost;
   /** Where the schedule CLI finds the daemon, and which token belongs to which bot. */
   access: { url: string; tokens: Map<string, string> };
   /** The scheduler, available once the daemon is listening. */
@@ -266,6 +281,10 @@ async function handle(
   const parts = url.pathname.split("/").filter((part) => part !== "");
   if (parts[0] === "agent" && parts[1] === "schedules") {
     await handleAgentSchedules(req, res, handler, parts.slice(2));
+    return;
+  }
+  if (parts[0] === "agent" && parts[1] === "browser") {
+    await handleAgentBrowser(req, res, handler, parts.slice(2));
     return;
   }
   if (parts[0] !== "bots") {
@@ -339,6 +358,64 @@ function grantScheduleAccess(handler: Handler, botId: string): void {
   );
 }
 
+/** The bot a bearer token was issued to, or undefined when it was not issued. */
+function tokenBot(req: IncomingMessage, handler: Handler): string | undefined {
+  const header = req.headers.authorization ?? "";
+  return header.startsWith("Bearer ")
+    ? handler.access.tokens.get(header.slice("Bearer ".length).trim())
+    : undefined;
+}
+
+/**
+ * The routes behind the `browser` CLI. `POST /agent/browser` starts the shared
+ * Chrome if needed and tells the calling bot where it listens and what its
+ * session is called. `POST /agent/browser/window` opens that bot a window.
+ */
+async function handleAgentBrowser(
+  req: IncomingMessage,
+  res: ServerResponse,
+  handler: Handler,
+  rest: string[],
+): Promise<void> {
+  const botId = tokenBot(req, handler);
+  if (botId === undefined) {
+    sendJson(res, 401, { error: "Unknown or missing token." });
+    return;
+  }
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: "Use POST." });
+    return;
+  }
+  const browserFailed = (error: unknown) =>
+    new HttpError(
+      503,
+      `The browser could not start: ${error instanceof Error ? error.message : "unknown error"}`,
+    );
+  if (rest.length === 0) {
+    let endpoint;
+    try {
+      endpoint = await handler.browser.endpoint();
+    } catch (error) {
+      throw browserFailed(error);
+    }
+    const lease: BrowserLease = {
+      ...endpoint,
+      session: `bot-${botId.replace(/[^A-Za-z0-9-]/g, "-")}`,
+    };
+    sendJson(res, 200, lease);
+    return;
+  }
+  if (rest.length === 1 && rest[0] === "window") {
+    try {
+      sendJson(res, 200, { targetId: await handler.browser.openWindow() });
+    } catch (error) {
+      throw browserFailed(error);
+    }
+    return;
+  }
+  sendJson(res, 404, { error: "Unknown route." });
+}
+
 /**
  * The routes behind the `schedule` CLI: list, create, pause, resume, delete.
  * The bot is the one the bearer token belongs to. A schedule that is missing
@@ -350,10 +427,7 @@ async function handleAgentSchedules(
   handler: Handler,
   rest: string[],
 ): Promise<void> {
-  const header = req.headers.authorization ?? "";
-  const botId = header.startsWith("Bearer ")
-    ? handler.access.tokens.get(header.slice("Bearer ".length).trim())
-    : undefined;
+  const botId = tokenBot(req, handler);
   if (botId === undefined) {
     sendJson(res, 401, { error: "Unknown or missing schedule token." });
     return;

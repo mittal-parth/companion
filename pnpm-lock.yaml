@@ -32,6 +32,9 @@ importers:
       '@companion/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      agent-browser:
+        specifier: 0.42.0
+        version: 0.42.0
       croner:
         specifier: ^11.0.0
         version: 11.0.0
@@ -1111,6 +1114,11 @@ packages:
   agent-base@6.0.2:
     resolution: {integrity: sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==}
     engines: {node: '>= 6.0.0'}
+
+  agent-browser@0.42.0:
+    resolution: {integrity: sha512-4njBSXKDH75hu+xSOJE4msKFQPIrwcyREFgr/tfDWQ4+vWiibNvEbxA5cH3cbAFG3vJa9vhGCPV2fLp5Py6NzA==}
+    engines: {node: '>=22.0.0'}
+    hasBin: true
 
   ajv-formats@2.1.1:
     resolution: {integrity: sha512-Wx0Kx52hxE7C18hkMEggYlEifqWZtYaRgouJor+WMdPnQyEK13vgEWyVNup7SoeeoLMsr4kf5h6dOW11I15MUA==}
@@ -4081,6 +4089,8 @@ snapshots:
       debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
+
+  agent-browser@0.42.0: {}
 
   ajv-formats@2.1.1(ajv@8.20.0):
     optionalDependencies:

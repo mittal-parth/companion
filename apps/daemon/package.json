@@ -11,6 +11,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.4.0",
     "@companion/shared": "workspace:*",
+    "agent-browser": "0.42.0",
     "croner": "^11.0.0"
   },
   "devDependencies": {
