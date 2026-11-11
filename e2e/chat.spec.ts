@@ -1,12 +1,14 @@
 /**
  * The chat against a daemon whose replies are scripted.
  * One bot is shared, so the cases run in order: a stream, an image, a reload.
+ * The theme case sends no message.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { daemonUrlFile, gateFile } from "../apps/daemon/scripts/chat-paths.ts";
+import { themeStorageKey } from "../apps/web/src/lib/theme.ts";
 
 const pixel =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -78,6 +80,57 @@ test("a reload mid-turn keeps the reply going", async ({ page }) => {
   release();
   await expect(finished).toHaveCount(3);
 });
+
+test("the theme choice changes the page and stays after reload", async ({
+  page,
+}) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/");
+  await expect(page.getByLabel("Message")).toBeVisible();
+  const root = page.locator("html");
+  await expect(root).toHaveAttribute("data-theme", "system");
+  await expect(root).not.toHaveClass(/\bdark\b/);
+  const light = await background(page);
+
+  await page.getByRole("radio", { name: "Dark" }).click();
+  await expect(root).toHaveAttribute("data-theme", "dark");
+  await expect(root).toHaveClass(/\bdark\b/);
+  await expect.poll(() => background(page)).not.toBe(light);
+
+  await page.reload();
+  await expect(page.getByRole("radio", { name: "Dark" })).toBeChecked();
+  await expect(root).toHaveClass(/\bdark\b/);
+  await expect.poll(() => background(page)).not.toBe(light);
+
+  await page.getByRole("radio", { name: "Light" }).click();
+  await expect(root).not.toHaveClass(/\bdark\b/);
+  await expect.poll(() => background(page)).toBe(light);
+
+  await page.getByRole("radio", { name: "System" }).click();
+  await expect(root).toHaveAttribute("data-theme", "system");
+  // The system listener is attached after paint. Wait for that frame, then
+  // change the operating system so the missed event is not the one we assert.
+  await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        requestAnimationFrame(() => resolve(undefined));
+      }),
+  );
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(root).toHaveClass(/\bdark\b/);
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(root).not.toHaveClass(/\bdark\b/);
+
+  await page.evaluate((key) => localStorage.removeItem(key), themeStorageKey);
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.reload();
+  await expect(root).toHaveAttribute("data-theme", "system");
+  await expect(root).toHaveClass(/\bdark\b/);
+});
+
+function background(page: Page): Promise<string> {
+  return page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+}
 
 function release(): void {
   writeFileSync(gateFile, "go");

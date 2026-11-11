@@ -34,6 +34,7 @@ import {
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
+import { AppHeader } from "@/components/theme-toggle";
 import {
   Tool,
   ToolContent,
@@ -94,9 +95,7 @@ export function Chat({
 
   return (
     <div className="mx-auto flex h-dvh w-full max-w-3xl flex-col">
-      <header className="flex items-center px-4 py-3">
-        <h1 className="text-sm font-medium">Companion</h1>
-      </header>
+      <AppHeader title="Companion" />
       <Conversation>
         <ConversationContent>
           {messages.length === 0 ? (
