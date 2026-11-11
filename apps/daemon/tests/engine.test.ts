@@ -21,7 +21,7 @@ import {
   visionAgentId,
   visionOpencodeModel,
   watchTurnIdle,
-} from "./engine.js";
+} from "../src/engine.js";
 
 test("the standing rules name each bot's instructions and memory", () => {
   const text = standingInstructions();

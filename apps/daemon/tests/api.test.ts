@@ -21,9 +21,9 @@ import type {
   TurnEvent,
 } from "@companion/shared";
 import { expect, test } from "vitest";
-import { startDaemon, openingPrompt, type Daemon } from "./api.js";
-import { defaultOpencodeModel, visionOpencodeModel } from "./engine.js";
-import type { Engine } from "./engine.js";
+import { startDaemon, openingPrompt, type Daemon } from "../src/api.js";
+import { defaultOpencodeModel, visionOpencodeModel } from "../src/engine.js";
+import type { Engine } from "../src/engine.js";
 
 const hello: acp.SessionUpdate = {
   sessionUpdate: "agent_message_chunk",

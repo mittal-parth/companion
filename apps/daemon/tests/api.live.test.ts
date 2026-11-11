@@ -9,11 +9,11 @@ import { join } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { BotTranscript, BotView } from "@companion/shared";
 import { expect, test } from "vitest";
-import { hasToolCall, replyText } from "./acp-hello.js";
-import { startDaemon } from "./api.js";
-import { standingInstructions } from "./engine.js";
-import { opencodeBin, parseEvents, requireOpencode } from "./live-support.js";
-import { openThreadStore } from "./thread-store.js";
+import { hasToolCall, replyText } from "../src/acp-hello.js";
+import { startDaemon } from "../src/api.js";
+import { standingInstructions } from "../src/engine.js";
+import { opencodeBin, parseEvents, requireOpencode } from "./helpers.js";
+import { openThreadStore } from "../src/thread-store.js";
 
 const live = process.env.COMPANION_LIVE === "1";
 

@@ -11,7 +11,7 @@ import {
   noteWord,
   redactWorkspace,
   replyText,
-} from "./acp-hello.js";
+} from "../src/acp-hello.js";
 
 test("a one-time allow is preferred over always", () => {
   const response = allowOnce([

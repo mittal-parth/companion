@@ -13,7 +13,7 @@ import {
   botConversation,
   openThreadStore,
   threadStorePath,
-} from "./thread-store.js";
+} from "../src/thread-store.js";
 
 const recorded = JSON.parse(
   readFileSync(

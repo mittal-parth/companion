@@ -8,14 +8,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ScheduleLogEntry } from "@companion/shared";
 import { expect, test } from "vitest";
-import { hasToolCall } from "./acp-hello.js";
-import { startDaemon } from "./api.js";
+import { hasToolCall } from "../src/acp-hello.js";
+import { startDaemon } from "../src/api.js";
 import {
   askBot,
   createLiveBot,
   opencodeBin,
   requireOpencode,
-} from "./live-support.js";
+} from "./helpers.js";
 
 const live = process.env.COMPANION_LIVE === "1";
 

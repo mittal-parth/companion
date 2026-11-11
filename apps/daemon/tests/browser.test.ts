@@ -11,10 +11,10 @@ import { join } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { BotView } from "@companion/shared";
 import { expect, test } from "vitest";
-import { startDaemon, type Daemon } from "./api.js";
-import { createBrowserHost } from "./browser.js";
-import { startFixtureSite } from "./browser-fixture-site.js";
-import { installBrowserShim, type Engine } from "./engine.js";
+import { startDaemon, type Daemon } from "../src/api.js";
+import { createBrowserHost } from "../src/browser.js";
+import { startFixtureSite } from "./fixture-site.js";
+import { installBrowserShim, type Engine } from "../src/engine.js";
 
 const chrome = process.env.COMPANION_CHROME ?? "google-chrome";
 const installed = ["Xvfb", "openbox", chrome].every(

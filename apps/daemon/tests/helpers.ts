@@ -1,12 +1,12 @@
 /**
- * Shared pieces of the live tests that talk to a real bot: finding OpenCode,
+ * Test helpers. Shared pieces of the live tests that talk to a real bot: finding OpenCode,
  * creating a bot, and sending a message and reading the reply it streams.
  */
 import { spawnSync } from "node:child_process";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { BotView, TurnEvent } from "@companion/shared";
 import { expect } from "vitest";
-import type { Daemon } from "./api.js";
+import type { Daemon } from "../src/api.js";
 
 export const opencodeBin = process.env.OPENCODE_BIN ?? "opencode";
 

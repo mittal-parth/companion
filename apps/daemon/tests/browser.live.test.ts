@@ -8,15 +8,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { hasToolCall } from "./acp-hello.js";
-import { startDaemon } from "./api.js";
-import { startFixtureSite } from "./browser-fixture-site.js";
+import { hasToolCall } from "../src/acp-hello.js";
+import { startDaemon } from "../src/api.js";
+import { startFixtureSite } from "./fixture-site.js";
 import {
   askBot,
   createLiveBot,
   opencodeBin,
   requireOpencode,
-} from "./live-support.js";
+} from "./helpers.js";
 
 const live = process.env.COMPANION_LIVE === "1";
 

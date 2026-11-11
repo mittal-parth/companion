@@ -1,5 +1,5 @@
 /**
- * A small fake website for browser tests and the browser CLI comparison.
+ * A small fake website for the browser tests.
  *
  * It has a search page, a booking form with a validation error, a page of
  * awkward elements (a new tab, an iframe, a dialog, a late button) and a login

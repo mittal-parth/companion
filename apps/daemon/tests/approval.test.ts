@@ -1,7 +1,11 @@
 import * as acp from "@agentclientprotocol/sdk";
 import type { HeldApproval } from "@companion/shared";
 import { expect, test } from "vitest";
-import { approvalFrom, approvalResponse, holdApproval } from "./approval.js";
+import {
+  approvalFrom,
+  approvalResponse,
+  holdApproval,
+} from "../src/approval.js";
 
 const secret = "pebble";
 const sessionId = "ses_test";

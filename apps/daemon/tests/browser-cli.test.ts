@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { runBrowserCli, type BrowserCliContext } from "./browser-cli.js";
+import { runBrowserCli, type BrowserCliContext } from "../src/browser-cli.js";
 
 let directory: string;
 let bot: string;

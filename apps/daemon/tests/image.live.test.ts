@@ -18,10 +18,10 @@ import { isAbsolute, join, relative } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { BotView } from "@companion/shared";
 import { expect, test } from "vitest";
-import { replyText } from "./acp-hello.js";
-import { startDaemon } from "./api.js";
-import { visionAgentId } from "./engine.js";
-import { opencodeBin, parseEvents, requireOpencode } from "./live-support.js";
+import { replyText } from "../src/acp-hello.js";
+import { startDaemon } from "../src/api.js";
+import { visionAgentId } from "../src/engine.js";
+import { opencodeBin, parseEvents, requireOpencode } from "./helpers.js";
 
 const live = process.env.COMPANION_LIVE === "1";
 
