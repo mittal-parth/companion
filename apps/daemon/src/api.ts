@@ -360,11 +360,16 @@ async function handle(
     return;
   }
   if (parts.length === 2) {
-    if (req.method !== "GET") {
-      sendJson(res, 405, { error: "Use GET." });
+    if (req.method === "GET") {
+      sendJson(res, 200, transcript(handler, botId));
       return;
     }
-    sendJson(res, 200, transcript(handler, botId));
+    if (req.method === "PATCH") {
+      const body = await readObject(req);
+      sendJson(res, 200, renameBot(handler, botId, body));
+      return;
+    }
+    sendJson(res, 405, { error: "Use GET or PATCH." });
     return;
   }
   if (parts.length === 3 && parts[2] === "messages") {
@@ -796,6 +801,16 @@ async function createBot(
     }
   }
   return view(handler.store, bot);
+}
+
+/** The name the person sees. The conversation and its files stay put. */
+function renameBot(
+  handler: Handler,
+  botId: string,
+  body: Record<string, unknown>,
+): BotView {
+  const name = requiredString(body, "name", "A bot needs a name.");
+  return view(handler.store, handler.store.renameBot(botId, name));
 }
 
 function view(store: ThreadStore, bot: Bot): BotView {
