@@ -20,6 +20,10 @@ _Avoid_: engine, model
 The weights a turn runs. More than one provider can serve the same model.
 _Avoid_: engine, provider, bot
 
+**Vision subagent**:
+A read-only child session that looks at an image file for a model that cannot see. The managed default uses Sarvam's GLM 5.3 Flash for this. A model that can already see does not have one.
+_Avoid_: browser, screenshot
+
 **Harness**:
 The model-and-tool loop inside an engine: one prompt, tool execution, permission checks, and the session updates that result.
 _Avoid_: daemon, bot
@@ -55,5 +59,5 @@ The user's allow-or-deny decision on a sensitive action the engine wants to take
 _Avoid_: permission
 
 **Schedule**:
-A rule that sends one prompt into a bot's conversation at later times. It is a calendar cron, an elapsed interval, or a single instant. The maths names each occurrence; the daemon fires it later.
+A rule that sends one prompt into a bot's conversation at later times. It is a calendar cron, an elapsed interval, or a single instant. The maths names each occurrence; the daemon fires it later. A schedule can be paused: while it is, nothing fires, no receipt is written, and the slots it misses are not caught up. The bot manages its own schedules by running the `schedule` command.
 _Avoid_: job, routine

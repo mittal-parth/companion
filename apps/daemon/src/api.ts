@@ -12,28 +12,37 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   engineNames,
   engines,
+  nextRun,
+  type AttachedImage,
   type Bot,
   type BotTranscript,
   type BotView,
   type EngineName,
   type Schedule,
+  type ScheduleAccess,
+  type ScheduleListing,
+  type ScheduleLogEntry,
   type ScheduleReceipt,
   type TurnEvent,
   type TurnState,
 } from "@companion/shared";
 import {
   defaultOpencodeModel,
+  delegatePastedImages,
+  imageBytes,
+  modelReadsImages,
   opencodeModelConfig,
   startOpencodeEngine,
   type Engine,
 } from "./engine.js";
-import { startScheduler } from "./scheduler.js";
+import { startScheduler, type Scheduler } from "./scheduler.js";
 import {
   botConversation,
   openThreadStore,
@@ -50,6 +59,10 @@ export type Daemon = {
   listSchedules(botId?: string): Schedule[];
   /** Stops a schedule and removes it. */
   deleteSchedule(id: string): void;
+  /** Stops a schedule from firing until it is resumed. */
+  pauseSchedule(id: string): void;
+  /** Lets a paused schedule fire at its next slot. Missed slots are skipped. */
+  resumeSchedule(id: string): void;
   /** Slots the daemon has decided, oldest first. */
   receipts(scheduleId: string): ScheduleReceipt[];
   close(): Promise<void>;
@@ -66,6 +79,8 @@ export type DaemonOptions = {
   opencodeBin?: string;
   /** OpenCode model id. Defaults to Sarvam GLM 5.3. */
   model?: string;
+  /** Receives each schedule event. Defaults to one JSON line per event on stderr. */
+  log?: (entry: ScheduleLogEntry) => void;
 };
 
 /**
@@ -86,6 +101,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         model,
         dataHome: join(root, "opencode-data"),
         configHome: join(root, "opencode-config"),
+        binDir: join(root, "bin"),
       }));
   } catch (error) {
     store.close();
@@ -96,6 +112,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   const turns = new Map<string, TurnState>();
   const idleWaiters = new Map<string, Array<() => void>>();
   let stopping = false;
+  const schedulerHolder: { current?: Scheduler } = {};
 
   function whenIdle(botId: string): Promise<void> {
     if (stopping || !busy.has(botId)) return Promise.resolve();
@@ -131,6 +148,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     whenIdle,
     release,
     stopping: () => stopping,
+    access: { url: "", tokens: new Map() },
+    scheduler: () => {
+      if (schedulerHolder.current === undefined) {
+        throw new Error("The daemon is starting.");
+      }
+      return schedulerHolder.current;
+    },
   };
   const server = createServer((req, res) => {
     void handle(req, res, handler).catch((error: unknown) => {
@@ -162,24 +186,34 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     throw new Error("The daemon did not bind a local port.");
   }
 
-  const scheduler = startScheduler({
+  const url = `http://127.0.0.1:${address.port}`;
+  handler.access.url = url;
+  // Every bot, old or new, gets the address and token its CLI needs.
+  for (const bot of store.listBots()) {
+    grantScheduleAccess(handler, bot.id);
+  }
+  const started = startScheduler({
     store,
     send: (botId, text) => runTurnWhenFree(handler, botId, text),
+    log: options.log ?? logToStderr,
   });
+  schedulerHolder.current = started;
 
   let closed = false;
   return {
-    url: `http://127.0.0.1:${address.port}`,
+    url,
     port: address.port,
-    createSchedule: (input) => scheduler.create(input),
-    listSchedules: (botId) => scheduler.list(botId),
-    deleteSchedule: (id) => scheduler.delete(id),
-    receipts: (scheduleId) => scheduler.receipts(scheduleId),
+    createSchedule: (input) => started.create(input),
+    listSchedules: (botId) => started.list(botId),
+    deleteSchedule: (id) => started.delete(id),
+    pauseSchedule: (id) => started.pause(id),
+    resumeSchedule: (id) => started.resume(id),
+    receipts: (scheduleId) => started.receipts(scheduleId),
     async close() {
       if (closed) return;
       closed = true;
       stopTurns();
-      scheduler.stop();
+      started.stop();
       server.closeAllConnections();
       await new Promise<void>((resolveClose, rejectClose) => {
         server.close((error) => {
@@ -202,6 +236,11 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   };
 }
 
+/** The default schedule log: one JSON line per event, easy to search later. */
+function logToStderr(entry: ScheduleLogEntry): void {
+  process.stderr.write(`${JSON.stringify({ scope: "schedule", ...entry })}\n`);
+}
+
 type Handler = {
   store: ThreadStore;
   storePath: string;
@@ -212,6 +251,10 @@ type Handler = {
   whenIdle(botId: string): Promise<void>;
   release(botId: string): void;
   stopping(): boolean;
+  /** Where the schedule CLI finds the daemon, and which token belongs to which bot. */
+  access: { url: string; tokens: Map<string, string> };
+  /** The scheduler, available once the daemon is listening. */
+  scheduler(): Scheduler;
 };
 
 async function handle(
@@ -221,6 +264,10 @@ async function handle(
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const parts = url.pathname.split("/").filter((part) => part !== "");
+  if (parts[0] === "agent" && parts[1] === "schedules") {
+    await handleAgentSchedules(req, res, handler, parts.slice(2));
+    return;
+  }
   if (parts[0] !== "bots") {
     sendJson(res, 404, { error: "Unknown route." });
     return;
@@ -269,6 +316,148 @@ async function handle(
 }
 
 /**
+ * Lets a bot's `schedule` CLI reach the daemon as that bot.
+ * The address and a secret token go into a file in the bot's folder, which is
+ * where the CLI looks. The daemon remembers which bot owns the token, so the
+ * CLI never says who it is. A restart issues new tokens and rewrites the files.
+ */
+function grantScheduleAccess(handler: Handler, botId: string): void {
+  let token = [...handler.access.tokens].find(
+    ([, owner]) => owner === botId,
+  )?.[0];
+  if (token === undefined) {
+    token = randomBytes(24).toString("hex");
+    handler.access.tokens.set(token, botId);
+  }
+  const folder = join(botConversation(handler.store, botId).cwd, ".companion");
+  mkdirSync(folder, { recursive: true });
+  const access: ScheduleAccess = { url: handler.access.url, token };
+  writeFileSync(
+    join(folder, "schedule.json"),
+    `${JSON.stringify(access, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+}
+
+/**
+ * The routes behind the `schedule` CLI: list, create, pause, resume, delete.
+ * The bot is the one the bearer token belongs to. A schedule that is missing
+ * and one that belongs to another bot look the same, so ids do not leak.
+ */
+async function handleAgentSchedules(
+  req: IncomingMessage,
+  res: ServerResponse,
+  handler: Handler,
+  rest: string[],
+): Promise<void> {
+  const header = req.headers.authorization ?? "";
+  const botId = header.startsWith("Bearer ")
+    ? handler.access.tokens.get(header.slice("Bearer ".length).trim())
+    : undefined;
+  if (botId === undefined) {
+    sendJson(res, 401, { error: "Unknown or missing schedule token." });
+    return;
+  }
+  const scheduler = handler.scheduler();
+
+  if (rest.length === 0) {
+    if (req.method === "GET") {
+      sendJson(
+        res,
+        200,
+        scheduler.list(botId).map((schedule) => listing(handler, schedule)),
+      );
+      return;
+    }
+    if (req.method === "POST") {
+      const body = await readObject(req);
+      // The bot and the id are the daemon's to choose, whatever the body says.
+      const input: Record<string, unknown> = {
+        ...body,
+        botId,
+        id: randomUUID(),
+      };
+      if (input.kind === "interval" && input.anchorAt === undefined) {
+        input.anchorAt = Date.now();
+      }
+      if (
+        input.kind === "once" &&
+        typeof input.at === "number" &&
+        input.at <= Date.now()
+      ) {
+        throw new HttpError(400, "A one-time schedule must be in the future.");
+      }
+      let schedule: Schedule;
+      try {
+        schedule = scheduler.create(input);
+      } catch (error) {
+        throw new HttpError(
+          400,
+          error instanceof Error ? error.message : "The schedule is invalid.",
+        );
+      }
+      sendJson(res, 201, listing(handler, schedule));
+      return;
+    }
+    sendJson(res, 405, { error: "Use GET or POST." });
+    return;
+  }
+
+  const id = decodeId(rest[0]);
+  const schedule = ownedSchedule(handler, botId, id);
+  if (rest.length === 1) {
+    if (req.method !== "DELETE") {
+      sendJson(res, 405, { error: "Use DELETE." });
+      return;
+    }
+    scheduler.delete(schedule.id);
+    sendJson(res, 200, { deleted: schedule.id });
+    return;
+  }
+  const action = rest[1];
+  if (rest.length === 2 && (action === "pause" || action === "resume")) {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { error: "Use POST." });
+      return;
+    }
+    if (action === "pause") scheduler.pause(schedule.id);
+    else scheduler.resume(schedule.id);
+    sendJson(res, 200, listing(handler, schedule));
+    return;
+  }
+  sendJson(res, 404, { error: "Unknown route." });
+}
+
+function decodeId(raw: string | undefined): string {
+  try {
+    return decodeURIComponent(raw ?? "");
+  } catch {
+    return raw ?? "";
+  }
+}
+
+function ownedSchedule(handler: Handler, botId: string, id: string): Schedule {
+  if (handler.store.hasSchedule(id)) {
+    const schedule = handler.store.getSchedule(id);
+    if (schedule.botId === botId) return schedule;
+  }
+  throw new HttpError(404, `Unknown schedule ${id}.`);
+}
+
+/** A schedule with its pause state and its next and last run, for the CLI. */
+function listing(handler: Handler, schedule: Schedule): ScheduleListing {
+  const paused = handler.store.isSchedulePaused(schedule.id);
+  const next = paused ? null : nextRun(schedule, Date.now());
+  const last = handler.store.latestReceipt(schedule.id);
+  return {
+    ...schedule,
+    paused,
+    nextRunAt: next === null ? null : new Date(next).toISOString(),
+    lastRunAt: last === null ? null : new Date(last).toISOString(),
+  };
+}
+
+/**
  * The first turn of a bot's conversation.
  * A description is the role to keep. Without one, the bot asks what it is for.
  * The model writes AGENTS.md and MEMORY.md when the turn gives it something to keep.
@@ -308,12 +497,14 @@ async function createBot(
     opencodeModelConfig(handler.model),
   );
   handler.store.createThread({ botId: bot.id, cwd: directory });
+  grantScheduleAccess(handler, bot.id);
   switch (engine) {
     case engines.opencode:
       await runTurn(
         handler,
         bot.id,
         openingPrompt(name, description),
+        [],
         () => {},
       );
       break;
@@ -363,6 +554,7 @@ async function sendMessage(
 ): Promise<void> {
   const body = await readObject(req);
   const text = requiredString(body, "text", "A message needs text.");
+  const images = attachedImages(body.images);
   let started = false;
   let detached = false;
   const detach = () => {
@@ -387,7 +579,7 @@ async function sendMessage(
     }
   };
   try {
-    const stopReason = await runTurn(handler, botId, text, (update) => {
+    const stopReason = await runTurn(handler, botId, text, images, (update) => {
       send({ event: "update", data: update });
     });
     send({ event: "done", data: { stopReason } });
@@ -414,6 +606,7 @@ async function runTurn(
   handler: Handler,
   botId: string,
   text: string,
+  images: readonly AttachedImage[],
   onUpdate: (update: acp.SessionUpdate) => void,
 ): Promise<acp.StopReason> {
   const bot = handler.store.getBot(botId);
@@ -426,11 +619,21 @@ async function runTurn(
   handler.busy.add(botId);
   handler.turns.set(botId, { status: "running" });
   const thread = botConversation(handler.store, botId);
+  // A text-only model is told where the file is. The bytes stay on disk.
+  const prompt = modelReadsImages(handler.model)
+    ? text
+    : delegatePastedImages(thread.cwd, text, images);
+  const seen = modelReadsImages(handler.model) ? images : [];
   try {
-    const stopReason = await handler.engine.prompt(botId, text, (update) => {
-      handler.store.appendUpdate(thread.id, update);
-      onUpdate(update);
-    });
+    const stopReason = await handler.engine.prompt(
+      botId,
+      prompt,
+      (update) => {
+        handler.store.appendUpdate(thread.id, update);
+        onUpdate(update);
+      },
+      seen,
+    );
     handler.turns.set(botId, { status: "finished", stopReason });
     return stopReason;
   } catch (error) {
@@ -456,7 +659,7 @@ async function runTurnWhenFree(
   for (;;) {
     if (handler.stopping()) throw new Error("The daemon is stopping.");
     try {
-      return await runTurn(handler, botId, text, () => {
+      return await runTurn(handler, botId, text, [], () => {
         // The update is already stored. A schedule has no open response.
       });
     } catch (error) {
@@ -519,7 +722,8 @@ function httpStatus(error: unknown): { status: number; message: string } {
     message.startsWith("Unknown engine") ||
     message.startsWith("The request") ||
     message.startsWith("A message needs") ||
-    message.startsWith("A description must")
+    message.startsWith("A description must") ||
+    message.startsWith("An image")
   ) {
     return { status: 400, message };
   }
@@ -549,7 +753,7 @@ function readBody(req: IncomingMessage): Promise<string> {
     let size = 0;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > 1_000_000) {
+      if (size > 8_000_000) {
         rejectBody(new HttpError(400, "The request body is too large."));
         req.destroy();
         return;
@@ -575,6 +779,45 @@ function requiredString(
     throw new HttpError(400, message);
   }
   return value.trim();
+}
+
+/**
+ * Images on a message, if the caller sent any.
+ * Each one is checked here so a bad file is a 400 before a turn starts.
+ */
+function attachedImages(value: unknown): AttachedImage[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value))
+    throw new HttpError(400, "An image must be listed.");
+  return value.map((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      throw new HttpError(400, "An image must be an object.");
+    }
+    const mimeType = (item as { mimeType?: unknown }).mimeType;
+    const data = (item as { data?: unknown }).data;
+    if (typeof mimeType !== "string" || typeof data !== "string") {
+      throw new HttpError(400, "An image needs a type and base64 data.");
+    }
+    try {
+      imageBytes({ mimeType, data });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "An image is not valid.";
+      throw new HttpError(400, message);
+    }
+    if (
+      mimeType !== "image/png" &&
+      mimeType !== "image/jpeg" &&
+      mimeType !== "image/gif" &&
+      mimeType !== "image/webp"
+    ) {
+      throw new HttpError(
+        400,
+        "An image needs a png, jpeg, gif, or webp type.",
+      );
+    }
+    return { mimeType, data };
+  });
 }
 
 /** A description is optional. Blank text is the same as leaving it out. */

@@ -2,14 +2,27 @@
  * Proves the local API creates a bot as one conversation and streams a turn.
  * The real OpenCode turn lives in api.live.test.ts.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
-import type { BotTranscript, BotView, TurnEvent } from "@companion/shared";
+import type {
+  AttachedImage,
+  BotTranscript,
+  BotView,
+  ScheduleAccess,
+  TurnEvent,
+} from "@companion/shared";
 import { expect, test } from "vitest";
 import { startDaemon, openingPrompt, type Daemon } from "./api.js";
-import { defaultOpencodeModel } from "./engine.js";
+import { defaultOpencodeModel, visionOpencodeModel } from "./engine.js";
 import type { Engine } from "./engine.js";
 
 const hello: acp.SessionUpdate = {
@@ -399,6 +412,157 @@ test("two bots can take a turn at the same time", async () => {
     }
   });
 });
+
+test("a bot gets a schedule token before its opening turn", async () => {
+  const seen: string[] = [];
+  const engine: Engine = {
+    async prompt() {
+      seen.push("turn");
+      return "end_turn";
+    },
+    async close() {},
+  };
+  const directory = mkdtempSync(join(tmpdir(), "companion-api-"));
+  const storePath = join(directory, "threads.db");
+  let daemon = await startDaemon({ storePath, engine });
+  try {
+    const bot = await createBot(daemon, "Ada");
+    expect(seen).toEqual(["turn"]);
+    const first = readAccess(bot.directory);
+    expect(first.url).toBe(daemon.url);
+    expect(first.token).not.toBe("");
+    const denied = await fetch(`${daemon.url}/agent/schedules`);
+    expect(denied.status).toBe(401);
+    const forged = await fetch(`${daemon.url}/agent/schedules`, {
+      headers: { authorization: "Bearer nope" },
+    });
+    expect(forged.status).toBe(401);
+    const claimed = await fetch(`${daemon.url}/agent/schedules`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${first.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        botId: "someone-else",
+        id: "chosen-by-the-caller",
+        kind: "once",
+        prompt: "Check",
+        at: Date.now() + 3_600_000,
+      }),
+    });
+    expect(claimed.status).toBe(201);
+    const schedule = (await claimed.json()) as { id: string; botId: string };
+    expect(schedule.botId).toBe(bot.id);
+    expect(schedule.id).not.toBe("chosen-by-the-caller");
+    await daemon.close();
+
+    daemon = await startDaemon({ storePath, engine });
+    const next = readAccess(bot.directory);
+    expect(next.token).not.toBe(first.token);
+    expect(next.url).toBe(daemon.url);
+    const stale = await fetch(`${daemon.url}/agent/schedules`, {
+      headers: { authorization: `Bearer ${first.token}` },
+    });
+    expect(stale.status).toBe(401);
+    const fresh = await fetch(`${daemon.url}/agent/schedules`, {
+      headers: { authorization: `Bearer ${next.token}` },
+    });
+    expect(fresh.status).toBe(200);
+    const listed = (await fresh.json()) as Array<{ id: string }>;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.id).toBe(schedule.id);
+    writeFileSync(join(directory, ".keep"), "");
+  } finally {
+    await daemon.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+const pixel =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+test("a pasted image stays out of the text model's prompt", async () => {
+  const seen: Array<{ text: string; images?: readonly AttachedImage[] }> = [];
+  const engine: Engine = {
+    async prompt(_botId, text, _onUpdate, images) {
+      seen.push({ text, images });
+      return "end_turn";
+    },
+    async close() {},
+  };
+  await withDaemon(engine, async (daemon) => {
+    const bot = await createBot(daemon, "Look");
+    const response = await postJson(daemon, `/bots/${bot.id}/messages`, {
+      text: "What is this?",
+      images: [{ mimeType: "image/png", data: pixel }],
+    });
+    expect(response.status).toBe(200);
+    const turn = seen.find((item) => item.text.includes("What is this?"));
+    expect(turn?.text).toContain("vision subagent");
+    expect(turn?.text).not.toContain(pixel);
+    expect(turn?.images ?? []).toHaveLength(0);
+    const names = readdirSync(join(bot.directory, "images"));
+    expect(names).toHaveLength(1);
+    const saved = join(bot.directory, "images", names[0] ?? "");
+    expect(turn?.text).toContain(saved);
+    expect(readFileSync(saved)).toEqual(Buffer.from(pixel, "base64"));
+  });
+});
+
+test("a model that can see is given the image bytes", async () => {
+  const seen: Array<{ text: string; images?: readonly AttachedImage[] }> = [];
+  const engine: Engine = {
+    async prompt(_botId, text, _onUpdate, images) {
+      seen.push({ text, images });
+      return "end_turn";
+    },
+    async close() {},
+  };
+  const directory = mkdtempSync(join(tmpdir(), "companion-see-"));
+  const daemon = await startDaemon({
+    storePath: join(directory, "threads.db"),
+    engine,
+    model: visionOpencodeModel,
+  });
+  try {
+    const bot = await createBot(daemon, "Look");
+    const response = await postJson(daemon, `/bots/${bot.id}/messages`, {
+      text: "What is this?",
+      images: [{ mimeType: "image/png", data: pixel }],
+    });
+    expect(response.status).toBe(200);
+    const turn = seen.find((item) => item.text === "What is this?");
+    expect(turn?.images).toEqual([{ mimeType: "image/png", data: pixel }]);
+    expect(existsSync(join(bot.directory, "images"))).toBe(false);
+  } finally {
+    await daemon.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an image of the wrong type is refused before a turn", async () => {
+  await withDaemon(
+    scripted([{ updates: [], stopReason: "end_turn" }]),
+    async (daemon) => {
+      const bot = await createBot(daemon, "Look");
+      const response = await postJson(daemon, `/bots/${bot.id}/messages`, {
+        text: "What is this?",
+        images: [{ mimeType: "image/jpeg", data: pixel }],
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "An image's bytes do not match its type.",
+      });
+    },
+  );
+});
+
+function readAccess(directory: string): ScheduleAccess {
+  return JSON.parse(
+    readFileSync(join(directory, ".companion", "schedule.json"), "utf8"),
+  ) as ScheduleAccess;
+}
 
 function scripted(
   turns: Array<{ updates: acp.SessionUpdate[]; stopReason: acp.StopReason }>,
