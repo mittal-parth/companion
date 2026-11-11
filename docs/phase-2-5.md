@@ -41,5 +41,5 @@ Nothing has shipped, so an older thread file is not upgraded. The tables are cre
 The check uses the real clock and a scripted engine. A missed slot is stored already in the past, or it is a real minute that passes while a person is mid-turn.
 
 ```bash
-pnpm exec vitest run apps/daemon/src/scheduler.test.ts apps/daemon/src/thread-store.test.ts
+pnpm exec vitest run apps/daemon/tests/scheduler.test.ts apps/daemon/tests/thread-store.test.ts
 ```

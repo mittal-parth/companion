@@ -13,7 +13,7 @@ The plan's paid comparison, two providers on the same five queries and an ADR, i
 OpenCode 2.2.6 is the first version that honors `websearch.use`. Older builds ignore the denials and put Firecrawl and Tavily back in the pool. The live check uses 2.2.7. It asks for the latest stable Bun release, requires a finished web search, and requires the reply to name Bun and cite a page.
 
 ```bash
-COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/src/api.live.test.ts -t "free web search"
+COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/tests/api.live.test.ts -t "free web search"
 ```
 
 `opencode` must be on `PATH`, or set `OPENCODE_BIN`.

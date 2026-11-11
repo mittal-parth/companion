@@ -2,6 +2,8 @@
 
 A bot can drive a real web page. This half of Task 2.9 covers the browser only. The desktop half is written up in [handoff-2-9-desktop.md](handoff-2-9-desktop.md).
 
+**Decision:** the browser CLI is [agent-browser](https://github.com/vercel-labs/agent-browser), a runtime dependency of the daemon, behind our own `browser` command. [Playwright CLI](https://playwright.dev/agent-cli/introduction) was compared and rejected, and it is not installed or used. See [adr/0002-browser-cli.md](adr/0002-browser-cli.md).
+
 The bot types `browser open <url>`, `browser snapshot -i`, `browser click @e3` and so on. It gets back a text snapshot of the page with element refs, so no vision model is needed. It never starts Chrome and never sees a port, a profile, or a session name.
 
 ## One Chrome, one window per bot
@@ -18,6 +20,15 @@ flowchart LR
   Host --> Xvfb --> Openbox --> Chrome["Chrome, shared profile, CDP on a free port"]
   Shim -->|"agent-browser --session bot-id --cdp port --pin-tab"| Chrome
 ```
+
+## Why a virtual display and a window manager
+
+The VM has no screen and no desktop. Two small programs fill that gap, and Chrome runs headed on top of them.
+
+- **Xvfb** is a virtual screen. It draws into memory, so a headed Chrome can run on a machine with no monitor. Headed matters here: sites behave differently when they detect headless Chrome, a person can later watch or take over the same screen (Phase 7), and the desktop half of this task (2.9b) needs a real screen that other apps can use as well.
+- **Openbox** is a light window manager. Without a window manager nothing manages focus, stacking or window placement. Chrome can run that way, but window behaviour is less predictable, so a fixed manager keeps it the same on every machine. Openbox also provides the multiple desktops that 2.9b may use.
+
+Neither does anything for a bot directly. The daemon starts them first, then Chrome, and stops them in reverse order.
 
 ## The pieces
 
@@ -45,18 +56,18 @@ Unit tests use a fake daemon and a recording runner. They cover the first-comman
 The integration test needs `Xvfb`, `openbox` and a Chrome on the machine and skips itself otherwise. It runs a local fake site and two bots at once through the real daemon and the real shim. Each bot books through a form, hits the validation error, and corrects it. Neither sees the other's page, one bot's login is visible to the other, and the login survives a daemon restart.
 
 ```bash
-pnpm exec vitest run apps/daemon/src/browser-cli.test.ts apps/daemon/src/browser.test.ts
+pnpm exec vitest run apps/daemon/tests/browser-cli.test.ts apps/daemon/tests/browser.test.ts
 ```
 
 The live test gives a real model the same fake site: a booking through the form, a login that survives a daemon restart, and a raw `google-chrome --version` that must fail.
 
 ```bash
-COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/src/browser.live.test.ts
+COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/tests/browser.live.test.ts
 ```
 
 `opencode` must be on `PATH`, or set `OPENCODE_BIN`.
 
-The harness that produced the ADR's numbers is not kept in the tree, because it needs a second CLI installed. It is in commit `16c61dd` (`apps/daemon/src/browser-compare.live.test.ts`, with `@playwright/cli` 0.1.24 as a dev dependency) if the comparison needs repeating.
+The harness that produced the ADR's numbers is not kept in the tree, because it needs a second CLI installed. It is in commit `16c61dd` (`apps/daemon/tests/browser-compare.live.test.ts`, with `@playwright/cli` 0.1.24 as a dev dependency) if the comparison needs repeating.
 
 ## Not done here
 

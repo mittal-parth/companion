@@ -13,7 +13,7 @@ A message may include `images`, each `{ "mimeType", "data" }` with base64 and no
 The unit tests check the config, the saved file, and that the text model's prompt has no image bytes. The live check paints a code in a normal font, so the letters are not in the file as text, and asks the bot what the code is. It passes when the reply quotes the code, the parent asked the vision subagent to read the saved file, a child read opened that file, and the bytes on disk are the PNG that was pasted. Other tool calls are allowed.
 
 ```bash
-COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/src/image.live.test.ts -t "pasted code"
+COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/tests/image.live.test.ts -t "pasted code"
 ```
 
 `opencode` must be on `PATH`, or set `OPENCODE_BIN`.

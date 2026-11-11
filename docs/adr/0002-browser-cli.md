@@ -1,5 +1,7 @@
 # agent-browser drives the bots' browser
 
+**Decision:** agent-browser is the browser CLI and the only one the daemon depends on. Playwright CLI is rejected, is not a dependency, and the bot's permissions deny it.
+
 Bots drive the shared Chrome with [agent-browser](https://github.com/vercel-labs/agent-browser) (0.42.0), behind our own `browser` command. [Playwright CLI](https://playwright.dev/agent-cli/introduction) (`@playwright/cli` 0.1.24) was the other candidate. Both give the model a text snapshot with element refs, so neither needs a vision model.
 
 Cost per task is close. The deciding factor is how each tool behaves when several bots share one Chrome, and only agent-browser can keep each bot on its own window.

@@ -16,7 +16,7 @@ There is no wall-clock cap. A turn can run for hours while it is working. Workin
 The turn's running or finished state lives in the daemon process. The updates live in SQLite. A restart of the daemon is out of scope: that stops the process, and the turn with it.
 
 ```bash
-pnpm exec vitest run apps/daemon/src/api.test.ts apps/daemon/src/engine.test.ts
+pnpm exec vitest run apps/daemon/tests/api.test.ts apps/daemon/tests/engine.test.ts
 ```
 
 One test drops the HTTP client in the middle of a turn, checks the `409`, then reads the bot and finds the updates that arrived after the drop. The other moves the clock forward hours: updates and an open tool call keep the turn alive, and silence cancels it.

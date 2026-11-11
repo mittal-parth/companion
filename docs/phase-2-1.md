@@ -8,10 +8,10 @@ One OpenCode process stays up for the life of the daemon. The first prompt calls
 
 The turn runs on Sarvam's `glm5.3`. Before OpenCode starts, the daemon writes `opencode.json` into the process config and into the bot's folder. The provider id is `sarvam`, the package is `@opencode/ai/providers/openai-compatible`, and the base URL is `https://api.sarvam.ai/v2`. The model reference is `sarvam/glm5.3`. The key stays in `SARVAM_API_KEY`. The config names that variable twice: as the provider credential, and as the `api-subscription-key` header. The key is not written into the file.
 
-OpenCode 2.2.6 read a word from the bot's `note.txt`, called a tool, and replied with that word. The stop reason was `end_turn`. That check is `apps/daemon/src/api.live.test.ts`. It runs when `COMPANION_LIVE=1`. The scripted tests in `apps/daemon/src/api.test.ts` cover create, the stream, the stored updates, the busy turn, and a failed engine. They do not start OpenCode.
+OpenCode 2.2.6 read a word from the bot's `note.txt`, called a tool, and replied with that word. The stop reason was `end_turn`. That check is `apps/daemon/tests/api.live.test.ts`. It runs when `COMPANION_LIVE=1`. The scripted tests in `apps/daemon/tests/api.test.ts` cover create, the stream, the stored updates, the busy turn, and a failed engine. They do not start OpenCode.
 
 ```bash
-COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/src/api.live.test.ts
+COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/tests/api.live.test.ts
 ```
 
 `opencode` must be on `PATH`, or set `OPENCODE_BIN`.
