@@ -1,9 +1,20 @@
 /**
- * The one reader for a turn's server-sent events.
- * The web app and the daemon's tests both use it.
+ * The image list and the turn reader are the one copy the chat and the daemon share.
  */
 import { expect, test } from "vitest";
-import { parseTurnEvents } from "./turn-event.js";
+import {
+  isImageMime,
+  maxImageBytes,
+  maxImagesPerMessage,
+  parseTurnEvents,
+} from "./protocol.js";
+
+test("an image type is one of the four stored types", () => {
+  expect(isImageMime("image/png")).toBe(true);
+  expect(isImageMime("image/svg+xml")).toBe(false);
+  expect(maxImagesPerMessage).toBe(4);
+  expect(maxImageBytes).toBe(5_000_000);
+});
 
 test("a finished turn body is one event per block", () => {
   const body = [

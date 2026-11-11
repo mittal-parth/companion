@@ -1,8 +1,47 @@
 /**
- * Reads the server-sent events a turn streams.
- * The daemon writes each one as an event name, one JSON data line, and a blank line.
+ * What the chat and the daemon agree on for one message.
+ * Which images can be attached, and how a turn's server-sent events are read.
+ * The daemon writes each event as a name, one JSON data line, and a blank line.
  */
 import type * as acp from "@agentclientprotocol/sdk";
+
+export const imageMimeTypes = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+] as const;
+
+export type ImageMimeType = (typeof imageMimeTypes)[number];
+
+/** How many images one message can carry. */
+export const maxImagesPerMessage = 4;
+
+/** The largest image the daemon will store. */
+export const maxImageBytes = 5_000_000;
+
+/**
+ * A pasted image.
+ * `data` is the file's base64, with no `data:` prefix, so a text-only model
+ * can be handed a path instead of the bytes.
+ */
+export type AttachedImage = {
+  mimeType: ImageMimeType;
+  data: string;
+};
+
+/** Whether a type is one this app will store. */
+export function isImageMime(value: string): value is ImageMimeType {
+  switch (value) {
+    case "image/png":
+    case "image/jpeg":
+    case "image/gif":
+    case "image/webp":
+      return true;
+    default:
+      return false;
+  }
+}
 
 /**
  * One server-sent event from a turn.

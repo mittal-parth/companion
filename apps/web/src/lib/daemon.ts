@@ -7,8 +7,12 @@
  * /api/health is the app's own health check, and it does not use this file.
  */
 import type { BotTranscript, BotView } from "@companion/shared";
-import { isImageMime, type AttachedImage } from "@companion/shared/image";
-import { parseTurnEvent, type TurnEvent } from "@companion/shared/turn-event";
+import {
+  isImageMime,
+  parseTurnEvent,
+  type AttachedImage,
+  type TurnEvent,
+} from "@companion/shared/protocol";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import type { UIMessage } from "ai";
 import { createReplyStream } from "./converter";

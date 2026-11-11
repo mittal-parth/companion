@@ -46,7 +46,7 @@ import {
   imageMimeTypes,
   maxImageBytes,
   maxImagesPerMessage,
-} from "@companion/shared/image";
+} from "@companion/shared/protocol";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { PaperclipIcon, XIcon } from "lucide-react";
 import { useMemo, useState } from "react";
