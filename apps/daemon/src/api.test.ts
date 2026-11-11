@@ -421,7 +421,11 @@ test("a pasted image stays out of the text model's prompt", async () => {
     expect(turn?.text).toContain("vision subagent");
     expect(turn?.text).not.toContain(pixel);
     expect(turn?.images ?? []).toHaveLength(0);
-    expect(readdirSync(join(bot.directory, "images"))).toHaveLength(1);
+    const names = readdirSync(join(bot.directory, "images"));
+    expect(names).toHaveLength(1);
+    const saved = join(bot.directory, "images", names[0] ?? "");
+    expect(turn?.text).toContain(saved);
+    expect(readFileSync(saved)).toEqual(Buffer.from(pixel, "base64"));
   });
 });
 

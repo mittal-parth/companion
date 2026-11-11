@@ -5,14 +5,22 @@
 import { deflateSync, inflateSync } from "node:zlib";
 import { spawnSync } from "node:child_process";
 import { randomInt } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { BotView, TurnEvent } from "@companion/shared";
 import { expect, test } from "vitest";
-import { hasToolCall, replyText } from "./acp-hello.js";
+import { replyText } from "./acp-hello.js";
 import { startDaemon } from "./api.js";
+import { visionAgentId } from "./engine.js";
 
 const opencodeBin = process.env.OPENCODE_BIN ?? "opencode";
 const live = process.env.COMPANION_LIVE === "1";
@@ -187,6 +195,39 @@ const canPaint =
   fontFile !== undefined &&
   spawnSync("ffmpeg", ["-version"], { encoding: "utf8" }).status === 0;
 
+test("the live check accepts a vision read of the saved file", () => {
+  const directory = mkdtempSync(join(tmpdir(), "companion-vision-read-"));
+  const path = join(directory, "images", "code.png");
+  const png = Buffer.from("png-bytes");
+  mkdirSync(join(directory, "images"));
+  writeFileSync(path, png);
+  try {
+    expect(visionReadPath(visionTurn(path), directory)).toBe(path);
+    expect(readFileSync(path)).toEqual(png);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the live check rejects a turn that decodes the image another way", () => {
+  const directory = mkdtempSync(join(tmpdir(), "companion-vision-other-"));
+  const path = join(directory, "images", "code.png");
+  mkdirSync(join(directory, "images"));
+  writeFileSync(path, Buffer.from("png-bytes"));
+  try {
+    const shell = tool("shell", { command: "python decode.py" });
+    expect(() =>
+      visionReadPath([shell, ...visionTurn(path)], directory),
+    ).toThrow(/only the vision subagent/);
+    const other = tool("subagent", { agent: "explore", prompt: path });
+    expect(() => visionReadPath([other], directory)).toThrow(
+      /only the vision subagent/,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test.skipIf(!canPaint)("the painted code is not stored as text", () => {
   const code = "K7XM";
   const png = paintedImage(code);
@@ -205,6 +246,7 @@ test.skipIf(!live)(
       throw new Error(`COMPANION_LIVE=1 but ${opencodeBin} did not start.`);
     }
     const code = paintedCode();
+    const png = paintedImage(code);
     const directory = mkdtempSync(join(tmpdir(), "companion-live-image-"));
     const daemon = await startDaemon({
       storePath: join(directory, "threads.db"),
@@ -223,12 +265,7 @@ test.skipIf(!live)(
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           text: "What code is painted in the attached image? Reply with only that code.",
-          images: [
-            {
-              mimeType: "image/png",
-              data: paintedImage(code).toString("base64"),
-            },
-          ],
+          images: [{ mimeType: "image/png", data: png.toString("base64") }],
         }),
       });
       expect(response.status).toBe(200);
@@ -238,8 +275,9 @@ test.skipIf(!live)(
       const updates = events.flatMap((event) =>
         event.event === "update" ? [event.data] : [],
       );
+      const saved = visionReadPath(updates, bot.directory);
+      expect(readFileSync(saved)).toEqual(png);
       expect(replyText(updates), JSON.stringify(events)).toContain(code);
-      expect(hasToolCall(updates), JSON.stringify(events)).toBe(true);
     } finally {
       await daemon.close();
       rmSync(directory, { recursive: true, force: true });
@@ -278,4 +316,156 @@ function parseEvents(body: string): TurnEvent[] {
     throw new Error(`Unexpected event ${name}.`);
   }
   return events;
+}
+
+type SeenCall = {
+  name?: string;
+  rawInput?: unknown;
+  locations?: { path: string }[];
+  child: boolean;
+};
+
+/**
+ * The file the vision subagent was asked to read.
+ * The parent may launch only that subagent, and the subagent may only read this file.
+ */
+function visionReadPath(
+  updates: readonly acp.SessionUpdate[],
+  directory: string,
+): string {
+  const calls = seenCalls(updates);
+  const parent = calls.filter((call) => !call.child);
+  const names = parent.map((call) => call.name ?? "unknown").join(", ");
+  if (
+    parent.length === 0 ||
+    parent.some(
+      (call) =>
+        call.name !== "subagent" || inputAgent(call.rawInput) !== visionAgentId,
+    )
+  ) {
+    throw new Error(
+      `The parent may use only the vision subagent. It used: ${names || "no tools"}.`,
+    );
+  }
+  const asked = parent
+    .map((call) => inputPrompt(call.rawInput))
+    .filter((prompt) => prompt.includes(`${directory}/images/`));
+  const child = calls.filter((call) => call.child);
+  if (child.some((call) => call.name !== "read")) {
+    throw new Error(
+      `The vision subagent may only read the file. It used: ${child.map((call) => call.name ?? "unknown").join(", ")}.`,
+    );
+  }
+  const read = child
+    .map((call) => callPath(call))
+    .find(
+      (path) =>
+        path !== undefined &&
+        asked.some((prompt) => prompt.includes(path)) &&
+        insideImages(directory, path) &&
+        existsSync(path),
+    );
+  if (read === undefined) {
+    throw new Error(
+      "The vision subagent did not read the image saved for this turn.",
+    );
+  }
+  return read;
+}
+
+/** One parent vision call and the child read of `path`, as OpenCode reports them. */
+function visionTurn(path: string): acp.SessionUpdate[] {
+  return [
+    tool("subagent", {
+      agent: visionAgentId,
+      prompt: `Read the image at ${path}.`,
+    }),
+    tool("read", { path }, [{ path }], {
+      "opencode/child-session": { depth: 1 },
+    }),
+  ];
+}
+
+function tool(
+  name: string,
+  rawInput: unknown,
+  locations: { path: string }[] = [],
+  meta?: Record<string, unknown>,
+): acp.SessionUpdate {
+  return {
+    sessionUpdate: "tool_call",
+    toolCallId: name,
+    title: name,
+    name,
+    locations,
+    rawInput,
+    ...(meta === undefined ? {} : { _meta: meta }),
+  };
+}
+
+function seenCalls(updates: readonly acp.SessionUpdate[]): SeenCall[] {
+  const calls = new Map<string, SeenCall>();
+  for (const update of updates) {
+    if (
+      update.sessionUpdate !== "tool_call" &&
+      update.sessionUpdate !== "tool_call_update"
+    ) {
+      continue;
+    }
+    const previous = calls.get(update.toolCallId) ?? { child: false };
+    const meta = update._meta?.["opencode/child-session"];
+    calls.set(update.toolCallId, {
+      name: update.name ?? previous.name,
+      rawInput: filled(update.rawInput) ? update.rawInput : previous.rawInput,
+      locations:
+        update.locations && update.locations.length > 0
+          ? update.locations
+          : previous.locations,
+      child: previous.child || (meta !== undefined && meta !== null),
+    });
+  }
+  return [...calls.values()];
+}
+
+function filled(value: unknown): boolean {
+  return (
+    typeof value === "object" && value !== null && Object.keys(value).length > 0
+  );
+}
+
+function inputAgent(input: unknown): string | undefined {
+  if (typeof input !== "object" || input === null || !("agent" in input)) {
+    return undefined;
+  }
+  return typeof input.agent === "string" ? input.agent : undefined;
+}
+
+function inputPrompt(input: unknown): string {
+  if (typeof input !== "object" || input === null || !("prompt" in input)) {
+    return "";
+  }
+  return typeof input.prompt === "string" ? input.prompt : "";
+}
+
+function callPath(call: SeenCall): string | undefined {
+  const located = call.locations?.find((location) => location.path.length > 0);
+  if (located !== undefined) return located.path;
+  if (typeof call.rawInput !== "object" || call.rawInput === null) {
+    return undefined;
+  }
+  if (!("path" in call.rawInput)) return undefined;
+  return typeof call.rawInput.path === "string"
+    ? call.rawInput.path
+    : undefined;
+}
+
+/** True when `path` is a file inside this bot's images folder. */
+function insideImages(directory: string, path: string): boolean {
+  if (!isAbsolute(path)) return false;
+  const fromImages = relative(join(directory, "images"), path);
+  return (
+    fromImages.length > 0 &&
+    !fromImages.startsWith("..") &&
+    !isAbsolute(fromImages)
+  );
 }

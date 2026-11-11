@@ -10,7 +10,7 @@ Pages stay on accessibility snapshots. That is Task 2.9. This subagent is for pi
 
 A message may include `images`, each `{ "mimeType", "data" }` with base64 and no `data:` prefix. The type has to match the bytes. A turn holds at most four images, each at most 5 MB.
 
-The unit tests check the config, the saved file, and that the text model's prompt has no image bytes. The live check paints a code in a normal font, so the letters are not in the file as text, and asks the bot what the code is.
+The unit tests check the config, the saved file, and that the text model's prompt has no image bytes. The live check paints a code in a normal font, so the letters are not in the file as text, and asks the bot what the code is. It passes only when the parent's only tool is the vision subagent, the subagent's only tool is a read of that file, and the file on disk is the PNG that was pasted.
 
 ```bash
 COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/src/image.live.test.ts -t "pasted code"
