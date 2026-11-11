@@ -1,9 +1,11 @@
 /**
  * Local API for one user's bots.
  * A bot is one long-lived conversation: create it, and OpenCode takes the
- * first turn. Later messages stream as server-sent events. The model keeps
- * that bot's instructions and memory in its folder. A schedule sends its
- * prompt into that same conversation.
+ * first turn. Later messages stream as server-sent events while that client
+ * stays connected. Closing the connection does not stop the turn. The stored
+ * updates and the turn's state stay on the daemon for whatever client comes
+ * back. The model keeps that bot's instructions and memory in its folder.
+ * A schedule sends its prompt into that same conversation.
  */
 import {
   createServer,
@@ -29,6 +31,7 @@ import {
   type ScheduleLogEntry,
   type ScheduleReceipt,
   type TurnEvent,
+  type TurnState,
 } from "@companion/shared";
 import {
   defaultOpencodeModel,
@@ -106,6 +109,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   }
 
   const busy = new Set<string>();
+  const turns = new Map<string, TurnState>();
   const idleWaiters = new Map<string, Array<() => void>>();
   let stopping = false;
   const schedulerHolder: { current?: Scheduler } = {};
@@ -140,6 +144,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     engine,
     model,
     busy,
+    turns,
     whenIdle,
     release,
     stopping: () => stopping,
@@ -242,6 +247,7 @@ type Handler = {
   engine: Engine;
   model: string;
   busy: Set<string>;
+  turns: Map<string, TurnState>;
   whenIdle(botId: string): Promise<void>;
   release(botId: string): void;
   stopping(): boolean;
@@ -295,7 +301,7 @@ async function handle(
       sendJson(res, 405, { error: "Use GET." });
       return;
     }
-    sendJson(res, 200, transcript(handler.store, botId));
+    sendJson(res, 200, transcript(handler, botId));
     return;
   }
   if (parts.length === 3 && parts[2] === "messages") {
@@ -524,17 +530,20 @@ function view(store: ThreadStore, bot: Bot): BotView {
   };
 }
 
-function transcript(store: ThreadStore, botId: string): BotTranscript {
-  const bot = store.getBot(botId);
-  const thread = botConversation(store, botId);
+function transcript(handler: Handler, botId: string): BotTranscript {
+  const bot = handler.store.getBot(botId);
+  const thread = botConversation(handler.store, botId);
   return {
-    ...view(store, bot),
-    updates: store.getThread(thread.id).updates,
+    ...view(handler.store, bot),
+    updates: handler.store.getThread(thread.id).updates,
+    turn: handler.turns.get(botId) ?? { status: "idle" },
   };
 }
 
 /**
- * Streams one turn. A second message for the same bot is refused until this
+ * Streams one turn while the client stays connected.
+ * If that connection closes, the turn keeps running. Its outcome is stored
+ * for a later read. A second message for the same bot is refused until this
  * one finishes, so its session updates stay in order.
  */
 async function sendMessage(
@@ -547,37 +556,44 @@ async function sendMessage(
   const text = requiredString(body, "text", "A message needs text.");
   const images = attachedImages(body.images);
   let started = false;
-  try {
-    const stopReason = await runTurn(handler, botId, text, images, (update) => {
-      if (!started) {
-        started = true;
-        res.writeHead(200, sseHeaders);
-      }
-      writeEvent(res, { event: "update", data: update });
-    });
+  // A closed connection is the client leaving. It is not a failed turn.
+  let detached = false;
+  const detach = () => {
+    detached = true;
+  };
+  res.on("close", detach);
+  res.on("error", detach);
+  const send = (event: TurnEvent) => {
+    if (detached) return;
     if (!started) {
       started = true;
       res.writeHead(200, sseHeaders);
     }
-    writeEvent(res, { event: "done", data: { stopReason } });
+    writeEvent(res, event);
+  };
+  try {
+    const stopReason = await runTurn(handler, botId, text, images, (update) => {
+      send({ event: "update", data: update });
+    });
+    send({ event: "done", data: { stopReason } });
     res.end();
   } catch (error) {
+    if (detached) return;
     const message = httpStatus(error).message;
     if (!started) {
       sendJson(res, httpStatus(error).status, { error: message });
       return;
     }
-    if (!res.writableEnded) {
-      writeEvent(res, { event: "error", data: { error: message } });
-      res.end();
-    }
+    send({ event: "error", data: { error: message } });
+    res.end();
   }
 }
 
 /**
  * Runs one turn and stores each update before the caller sees it.
- * The busy set is taken before any wait, so two turns of one bot cannot overlap
- * and two bots can.
+ * Records the turn as running, then finished or failed, so a later read can
+ * say what happened after the client has gone. The busy set is taken before
+ * any wait, so two turns of one bot cannot overlap and two bots can.
  */
 async function runTurn(
   handler: Handler,
@@ -594,6 +610,7 @@ async function runTurn(
     throw new HttpError(409, "This bot is already working on a turn.");
   }
   handler.busy.add(botId);
+  handler.turns.set(botId, { status: "running" });
   const thread = botConversation(handler.store, botId);
   // A text-only model is told where the file is. The bytes stay on disk.
   const prompt = modelReadsImages(handler.model)
@@ -601,7 +618,7 @@ async function runTurn(
     : delegatePastedImages(thread.cwd, text, images);
   const seen = modelReadsImages(handler.model) ? images : [];
   try {
-    return await handler.engine.prompt(
+    const stopReason = await handler.engine.prompt(
       botId,
       prompt,
       (update) => {
@@ -610,6 +627,14 @@ async function runTurn(
       },
       seen,
     );
+    handler.turns.set(botId, { status: "finished", stopReason });
+    return stopReason;
+  } catch (error) {
+    handler.turns.set(botId, {
+      status: "failed",
+      error: httpStatus(error).message,
+    });
+    throw error;
   } finally {
     handler.release(botId);
   }

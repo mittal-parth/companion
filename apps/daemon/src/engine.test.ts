@@ -1,5 +1,6 @@
 /**
- * Proves the OpenCode config carries the model and the standing bot rules.
+ * Proves the OpenCode config carries the model and the standing bot rules,
+ * and that a turn stays alive while it is still working.
  * The rules tell every bot to read and update its own files. They are not
  * those files.
  */
@@ -7,16 +8,19 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "vitest";
+import type * as acp from "@agentclientprotocol/sdk";
 import type { AttachedImage } from "@companion/shared";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   defaultOpencodeModel,
   delegatePastedImages,
   imageBytes,
   installOpencodeConfig,
   standingInstructions,
+  turnIdleTimeoutMs,
   visionAgentId,
   visionOpencodeModel,
+  watchTurnIdle,
 } from "./engine.js";
 
 test("the standing rules name each bot's instructions and memory", () => {
@@ -113,6 +117,76 @@ test("installing the config writes the rules beside the model file", () => {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+test("a finished turn is not cancelled by a late update", () => {
+  vi.useFakeTimers();
+  const idle = vi.fn();
+  const watch = watchTurnIdle(turnIdleTimeoutMs, idle);
+  watch.stop();
+  watch.note({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "late" },
+  });
+  vi.advanceTimersByTime(turnIdleTimeoutMs);
+  expect(idle).not.toHaveBeenCalled();
+});
+
+test("a quiet turn is cancelled at the idle limit", () => {
+  vi.useFakeTimers();
+  const idle = vi.fn();
+  const watch = watchTurnIdle(turnIdleTimeoutMs, idle);
+  vi.advanceTimersByTime(turnIdleTimeoutMs - 1);
+  expect(idle).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(1);
+  expect(idle).toHaveBeenCalledTimes(1);
+  watch.stop();
+});
+
+test("session updates keep a turn alive for hours", () => {
+  vi.useFakeTimers();
+  const idle = vi.fn();
+  const watch = watchTurnIdle(turnIdleTimeoutMs, idle);
+  const chunk: acp.SessionUpdate = {
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "still working" },
+  };
+  for (let minute = 0; minute < 180; minute += 1) {
+    vi.advanceTimersByTime(60_000);
+    watch.note(chunk);
+  }
+  expect(idle).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(turnIdleTimeoutMs);
+  expect(idle).toHaveBeenCalledTimes(1);
+  watch.stop();
+});
+
+test("an open tool call keeps a turn alive through silence", () => {
+  vi.useFakeTimers();
+  const idle = vi.fn();
+  const watch = watchTurnIdle(turnIdleTimeoutMs, idle);
+  watch.note({
+    sessionUpdate: "tool_call",
+    toolCallId: "shell",
+    title: "run",
+    status: "in_progress",
+  });
+  vi.advanceTimersByTime(6 * 60 * 60 * 1000);
+  expect(idle).not.toHaveBeenCalled();
+  watch.note({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "shell",
+    status: "completed",
+  });
+  vi.advanceTimersByTime(turnIdleTimeoutMs - 1);
+  expect(idle).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(1);
+  expect(idle).toHaveBeenCalledTimes(1);
+  watch.stop();
 });
 
 const pixel =

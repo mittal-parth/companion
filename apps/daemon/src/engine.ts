@@ -37,6 +37,61 @@ export const visionAgentId = "vision";
 /** Named in the config. The key itself stays in the environment. */
 const sarvamKeyEnv = "SARVAM_API_KEY";
 
+/**
+ * How long a turn may go without a session update while no tool call is open.
+ * A tool that has not finished is still work, so a long command keeps the turn
+ * alive. A model that stops sending anything is cancelled.
+ */
+export const turnIdleTimeoutMs = 180_000;
+
+/**
+ * Cancels a turn that has gone quiet.
+ * The wait starts at once and resets on each session update. A tool call that
+ * has not reached a final status holds the turn through a long silence.
+ * `stop` ends the watch so a finished turn is not cancelled later.
+ */
+export function watchTurnIdle(
+  timeoutMs: number,
+  onIdle: () => void,
+): { note(update: acp.SessionUpdate): void; stop(): void } {
+  const open = new Set<string>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+
+  function arm(): void {
+    clearTimeout(timer);
+    if (stopped || open.size > 0) return;
+    timer = setTimeout(onIdle, timeoutMs);
+  }
+
+  arm();
+  return {
+    note(update) {
+      if (stopped) return;
+      if (
+        update.sessionUpdate === "tool_call" ||
+        update.sessionUpdate === "tool_call_update"
+      ) {
+        // A new tool call with no status is pending. An update with none
+        // leaves the tool call as it was.
+        const status =
+          update.status ??
+          (update.sessionUpdate === "tool_call" ? "pending" : undefined);
+        if (status === "completed" || status === "failed") {
+          open.delete(update.toolCallId);
+        } else if (status !== undefined) {
+          open.add(update.toolCallId);
+        }
+      }
+      arm();
+    },
+    stop() {
+      stopped = true;
+      clearTimeout(timer);
+    },
+  };
+}
+
 const maxImagesPerTurn = 4;
 const maxImageBytes = 5_000_000;
 
@@ -90,8 +145,6 @@ export function modelReadsImages(model: string): boolean {
 export function needsVisionSubagent(model: string): boolean {
   return model === defaultOpencodeModel;
 }
-
-const turnTimeoutMs = 180_000;
 
 /**
  * Rules every bot follows.
@@ -500,14 +553,23 @@ export async function startOpencodeEngine(options: {
         openSessions,
         botId,
       );
-      listeners.set(sessionId, onUpdate);
-      const signal = AbortSignal.timeout(turnTimeoutMs);
+      const abort = new AbortController();
+      let stoppedForSilence = false;
+      // A quiet model is cancelled. A tool call that has not finished is still work.
+      const idle = watchTurnIdle(turnIdleTimeoutMs, () => {
+        stoppedForSilence = true;
+        abort.abort();
+      });
       const cancel = () => {
         void agent
           .notify(acp.methods.agent.session.cancel, { sessionId })
           .catch(() => undefined);
       };
-      signal.addEventListener("abort", cancel);
+      abort.signal.addEventListener("abort", cancel);
+      listeners.set(sessionId, (update) => {
+        idle.note(update);
+        onUpdate(update);
+      });
       const request = agent.request(
         acp.methods.agent.session.prompt,
         {
@@ -515,17 +577,19 @@ export async function startOpencodeEngine(options: {
           // GLM 5.3 never sees the bytes, even if a caller passed them.
           prompt: promptBlocks(options.model, text, images),
         },
-        { cancellationSignal: signal, stopWaitingOnCancel: true },
+        { cancellationSignal: abort.signal, stopWaitingOnCancel: true },
       );
       void request.catch(() => undefined);
       try {
         const response = await Promise.race([request, providerError]);
         return response.stopReason;
       } catch (error) {
-        if (!signal.aborted) cancel();
+        if (stoppedForSilence) return "cancelled";
+        cancel();
         throw withStderr(error, stderr);
       } finally {
-        signal.removeEventListener("abort", cancel);
+        idle.stop();
+        abort.signal.removeEventListener("abort", cancel);
         listeners.delete(sessionId);
       }
     },
