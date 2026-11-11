@@ -171,6 +171,8 @@ When the user wants something to happen later or on a repeat, load the schedules
 When a question needs a current public fact, search the web and cite the pages you used. Do not invent that fact.
 
 When a task needs a real web page, such as opening a result, filling a form or reading something a search cannot show, load the browser skill and use the browser command. Never start Chrome yourself.
+
+When a task needs a desktop application that is not a web page, load the desktop skill and use the desktop command. Never drive the screen with xdotool, wmctrl, scrot or agent-desktop. A web page stays on the browser command.
 ${vision}
 If AGENTS.md does not yet say what you are for, ask the user. Do not invent a role.
 
@@ -196,6 +198,27 @@ const rawBrowserCommands = [
 ];
 
 /**
+ * Commands a bot must not run directly. The `desktop` command is the one way
+ * onto the shared screen. The raw tools can type into another bot's window,
+ * and a display variable in front of them is the same command.
+ */
+const rawDesktopCommands = [
+  "agent-desktop *",
+  "npx agent-desktop *",
+  "xdotool *",
+  "wmctrl *",
+  "scrot *",
+  "DISPLAY=* xdotool *",
+  "DISPLAY=* wmctrl *",
+  "DISPLAY=* scrot *",
+  "DISPLAY=* agent-desktop *",
+  "env * xdotool *",
+  "env * wmctrl *",
+  "env * scrot *",
+  "env * agent-desktop *",
+];
+
+/**
  * Tells OpenCode to call Sarvam, and to search the web with no key.
  * The same file is written into the bot's folder and into the process config.
  * The key is named twice, as the provider credential and as Sarvam's header,
@@ -218,6 +241,7 @@ export function opencodeModelConfig(model: string): string {
   }> = [
     { action: "websearch", resource: "*", effect: "allow" },
     { action: "shell", resource: "browser *", effect: "allow" },
+    { action: "shell", resource: "desktop *", effect: "allow" },
   ];
   // The text model is allowed to launch the reader without asking the user.
   if (needsVisionSubagent(model)) {
@@ -238,7 +262,7 @@ export function opencodeModelConfig(model: string): string {
       { action: "websearch.use", resource: "firecrawl", effect: "deny" },
       { action: "websearch.use", resource: "tavily", effect: "deny" },
       { action: "websearch.use", resource: "opencode", effect: "deny" },
-      ...rawBrowserCommands.map((command) => ({
+      ...[...rawBrowserCommands, ...rawDesktopCommands].map((command) => ({
         action: "tool.use",
         resource: `shell:${command}`,
         effect: "deny",
@@ -433,6 +457,11 @@ export function installBrowserShim(binDir: string): void {
   installShim(binDir, "browser", "./browser-cli.ts");
 }
 
+/** Puts the `desktop` command on the bot's PATH, the same way as `browser`. */
+export function installDesktopShim(binDir: string): void {
+  installShim(binDir, "desktop", "./desktop-cli.ts");
+}
+
 function installShim(binDir: string, name: string, cliFile: string): void {
   mkdirSync(binDir, { recursive: true });
   const cli = fileURLToPath(new URL(cliFile, import.meta.url));
@@ -462,7 +491,7 @@ export async function startOpencodeEngine(options: {
   model: string;
   dataHome: string;
   configHome: string;
-  /** A directory prepended to PATH, holding the `schedule` and `browser` commands. */
+  /** A directory prepended to PATH, holding the `schedule`, `browser` and `desktop` commands. */
   binDir: string;
 }): Promise<Engine> {
   if (
@@ -476,6 +505,7 @@ export async function startOpencodeEngine(options: {
   installOpencodeConfig(options.configHome, options.model);
   installScheduleShim(options.binDir);
   installBrowserShim(options.binDir);
+  installDesktopShim(options.binDir);
   mkdirSync(options.dataHome, { recursive: true });
 
   const env = { ...process.env };

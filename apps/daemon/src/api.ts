@@ -25,6 +25,9 @@ import {
   type BotTranscript,
   type BotView,
   type BrowserLease,
+  type DesktopLease,
+  type DesktopSession,
+  type DesktopWindow,
   type EngineName,
   type Schedule,
   type ScheduleAccess,
@@ -35,6 +38,8 @@ import {
   type TurnState,
 } from "@companion/shared";
 import { createBrowserHost, type BrowserHost } from "./browser.js";
+import { createDesktopHost, type DesktopHost } from "./desktop.js";
+import { createDisplayHost, type DisplayHost } from "./display.js";
 import {
   defaultOpencodeModel,
   delegatePastedImages,
@@ -85,6 +90,14 @@ export type DaemonOptions = {
   log?: (entry: ScheduleLogEntry) => void;
   /** The shared Chrome. Defaults to one that keeps its profile beside the database. */
   browser?: BrowserHost;
+  /** Desktop apps on the shared screen. Defaults to the short allow list. */
+  desktop?: DesktopHost;
+  /**
+   * The screen Chrome and desktop apps share. Defaults to one beside the
+   * database, which this daemon stops. A caller that passes `display` stops
+   * that screen itself.
+   */
+  display?: DisplayHost;
 };
 
 /**
@@ -112,8 +125,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     throw error;
   }
 
+  const createdDisplay = options.display === undefined;
+  const display =
+    options.display ?? createDisplayHost({ directory: join(root, "display") });
   const browser =
-    options.browser ?? createBrowserHost({ directory: join(root, "browser") });
+    options.browser ??
+    createBrowserHost({ directory: join(root, "browser"), display });
+  const desktop =
+    options.desktop ??
+    createDesktopHost({ directory: join(root, "desktop"), display });
   const busy = new Set<string>();
   const turns = new Map<string, TurnState>();
   const idleWaiters = new Map<string, Array<() => void>>();
@@ -155,6 +175,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     release,
     stopping: () => stopping,
     browser,
+    desktop,
     access: { url: "", tokens: new Map() },
     scheduler: () => {
       if (schedulerHolder.current === undefined) {
@@ -184,6 +205,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   } catch (error) {
     await engine.close();
     await browser.close();
+    await desktop.close();
+    if (createdDisplay) await display.close();
     store.close();
     throw error;
   }
@@ -191,6 +214,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   if (address === null || typeof address === "string") {
     await engine.close();
     await browser.close();
+    await desktop.close();
+    if (createdDisplay) await display.close();
     store.close();
     throw new Error("The daemon did not bind a local port.");
   }
@@ -242,7 +267,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         try {
           await browser.close();
         } finally {
-          store.close();
+          try {
+            await desktop.close();
+          } finally {
+            try {
+              if (createdDisplay) await display.close();
+            } finally {
+              store.close();
+            }
+          }
         }
       }
     },
@@ -266,6 +299,8 @@ type Handler = {
   stopping(): boolean;
   /** The Chrome every bot's `browser` command shares. */
   browser: BrowserHost;
+  /** The apps every bot's `desktop` command may start. */
+  desktop: DesktopHost;
   /** Where the schedule CLI finds the daemon, and which token belongs to which bot. */
   access: { url: string; tokens: Map<string, string> };
   /** The scheduler, available once the daemon is listening. */
@@ -285,6 +320,10 @@ async function handle(
   }
   if (parts[0] === "agent" && parts[1] === "browser") {
     await handleAgentBrowser(req, res, handler, parts.slice(2));
+    return;
+  }
+  if (parts[0] === "agent" && parts[1] === "desktop") {
+    await handleAgentDesktop(req, res, handler, parts.slice(2));
     return;
   }
   if (parts[0] !== "bots") {
@@ -412,6 +451,87 @@ async function handleAgentBrowser(
       throw browserFailed(error);
     }
     return;
+  }
+  sendJson(res, 404, { error: "Unknown route." });
+}
+
+/**
+ * The routes behind the `desktop` CLI.
+ * `POST /agent/desktop/session` tells the bot where the lock is without listing
+ * windows. `POST /agent/desktop` lists only that bot's windows. `launch` and
+ * `close` start and stop allow-listed apps for that bot.
+ */
+async function handleAgentDesktop(
+  req: IncomingMessage,
+  res: ServerResponse,
+  handler: Handler,
+  rest: string[],
+): Promise<void> {
+  const botId = tokenBot(req, handler);
+  if (botId === undefined) {
+    sendJson(res, 401, { error: "Unknown or missing token." });
+    return;
+  }
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: "Use POST." });
+    return;
+  }
+  const failed = (error: unknown, status = 503) =>
+    new HttpError(
+      status,
+      error instanceof Error ? error.message : "The desktop could not start.",
+    );
+  try {
+    if (rest.length === 1 && rest[0] === "session") {
+      const session: DesktopSession = await handler.desktop.session(botId);
+      sendJson(res, 200, session);
+      return;
+    }
+    if (rest.length === 0) {
+      const lease: DesktopLease = await handler.desktop.lease(botId);
+      sendJson(res, 200, lease);
+      return;
+    }
+    if (rest.length === 1 && rest[0] === "launch") {
+      const body = await readObject(req);
+      const app = body.app;
+      const file = body.file;
+      if (
+        typeof app !== "string" ||
+        (file !== undefined && typeof file !== "string")
+      ) {
+        throw new HttpError(400, "desktop launch needs an app name.");
+      }
+      const directory = botConversation(handler.store, botId).cwd;
+      const window: DesktopWindow = await handler.desktop.launch(
+        botId,
+        app,
+        file,
+        directory,
+      );
+      sendJson(res, 200, window);
+      return;
+    }
+    if (rest.length === 1 && rest[0] === "close") {
+      const body = await readObject(req);
+      const windowId = body.windowId;
+      if (windowId !== undefined && typeof windowId !== "string") {
+        throw new HttpError(400, "desktop close needs a window id.");
+      }
+      await handler.desktop.closeApps(botId, windowId);
+      sendJson(res, 200, { closed: true });
+      return;
+    }
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    const message = error instanceof Error ? error.message : "";
+    const status =
+      message.startsWith("desktop launch") ||
+      message.startsWith("That file") ||
+      message.startsWith("That window")
+        ? 400
+        : 503;
+    throw failed(error, status);
   }
   sendJson(res, 404, { error: "Unknown route." });
 }

@@ -180,6 +180,37 @@ export type BrowserLease = BrowserEndpoint & {
   session: string;
 };
 
+/**
+ * The shared screen, as the daemon tells a bot's `desktop` command.
+ * The command uses this to point the desktop tool at the right screen and to
+ * take the one lock every bot shares. It does not print the display to the bot.
+ */
+export type DesktopSession = {
+  display: string;
+  dbusAddress: string;
+  generation: string;
+  /** A private name for this bot's snapshot refs. */
+  session: string;
+  /** A directory the command creates to hold the shared desktop lock. */
+  lockPath: string;
+};
+
+/** One window the daemon opened for a bot. */
+export type DesktopWindow = {
+  windowId: string;
+  /** The allow-list name, `form` or `mousepad`. */
+  app: string;
+  /** The name the desktop tool uses for the same app. */
+  toolApp: string;
+  pid: number;
+  title: string;
+};
+
+/** What one bot's `desktop` command may act on: the screen, and only its windows. */
+export type DesktopLease = DesktopSession & {
+  windows: DesktopWindow[];
+};
+
 /** One line of the schedule log, so a firing can be traced afterwards. */
 export type ScheduleLogEntry = {
   event:

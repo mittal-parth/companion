@@ -31,6 +31,7 @@ test("the standing rules name each bot's instructions and memory", () => {
   expect(text).toContain("search the web and cite the pages");
   expect(text).toContain("load the schedules skill");
   expect(text).toContain("load the browser skill");
+  expect(text).toContain("load the desktop skill");
   expect(text).toContain("ask the vision subagent");
   expect(text).not.toContain("SARVAM_API_KEY");
   expect(standingInstructions(visionOpencodeModel)).not.toContain(
@@ -74,6 +75,7 @@ test("installing the config writes the rules beside the model file", () => {
     expect(config.permissions).toEqual([
       { action: "websearch", resource: "*", effect: "allow" },
       { action: "shell", resource: "browser *", effect: "allow" },
+      { action: "shell", resource: "desktop *", effect: "allow" },
       { action: "subagent", resource: visionAgentId, effect: "allow" },
     ]);
     expect(config.agents.vision.mode).toBe("subagent");
@@ -106,6 +108,19 @@ test("installing the config writes the rules beside the model file", () => {
         "chromium *",
         "chromium-browser *",
         "chrome *",
+        "agent-desktop *",
+        "npx agent-desktop *",
+        "xdotool *",
+        "wmctrl *",
+        "scrot *",
+        "DISPLAY=* xdotool *",
+        "DISPLAY=* wmctrl *",
+        "DISPLAY=* scrot *",
+        "DISPLAY=* agent-desktop *",
+        "env * xdotool *",
+        "env * wmctrl *",
+        "env * scrot *",
+        "env * agent-desktop *",
       ].map((command) => ({
         action: "tool.use",
         resource: `shell:${command}`,
@@ -124,6 +139,15 @@ test("installing the config writes the rules beside the model file", () => {
         "utf8",
       ),
     ).toBe(readFileSync(skill, "utf8"));
+    const desktopSkill = fileURLToPath(
+      new URL("../skills/desktop/SKILL.md", import.meta.url),
+    );
+    expect(
+      readFileSync(
+        join(directory, "opencode", "skills", "desktop", "SKILL.md"),
+        "utf8",
+      ),
+    ).toBe(readFileSync(desktopSkill, "utf8"));
     const key = process.env.SARVAM_API_KEY;
     if (key !== undefined && key.length >= 16) {
       expect(
@@ -220,6 +244,7 @@ test("a model that already sees gets no vision subagent", () => {
     expect(config.permissions).toEqual([
       { action: "websearch", resource: "*", effect: "allow" },
       { action: "shell", resource: "browser *", effect: "allow" },
+      { action: "shell", resource: "desktop *", effect: "allow" },
     ]);
     expect(readFileSync(join(directory, "opencode", "AGENTS.md"), "utf8")).toBe(
       standingInstructions(visionOpencodeModel),

@@ -1,6 +1,6 @@
 # Phase 2.9 (browser)
 
-A bot can drive a real web page. This half of Task 2.9 covers the browser only. The desktop half is written up in [handoff-2-9-desktop.md](handoff-2-9-desktop.md).
+A bot can drive a real web page. This half of Task 2.9 covers the browser only. The desktop half is [phase-2-9b.md](phase-2-9b.md).
 
 **Decision:** the browser CLI is [agent-browser](https://github.com/vercel-labs/agent-browser), a runtime dependency of the daemon, behind our own `browser` command. [Playwright CLI](https://playwright.dev/agent-cli/introduction) was compared and rejected, and it is not installed or used. See [adr/0002-browser-cli.md](adr/0002-browser-cli.md).
 
@@ -17,7 +17,8 @@ flowchart LR
   Bot["bot shell: browser snapshot -i"] --> Shim["browser shim (browser-cli.ts)"]
   Shim -->|"POST /agent/browser (bot token)"| Daemon
   Daemon --> Host["BrowserHost (browser.ts)"]
-  Host --> Xvfb --> Openbox --> Chrome["Chrome, shared profile, CDP on a free port"]
+  Host --> Display["DisplayHost: Xvfb, Openbox, session bus"]
+  Display --> Chrome["Chrome, shared profile, CDP on a free port"]
   Shim -->|"agent-browser --session bot-id --cdp port --pin-tab"| Chrome
 ```
 
@@ -26,13 +27,13 @@ flowchart LR
 The VM has no screen and no desktop. Two small programs fill that gap, and Chrome runs headed on top of them.
 
 - **Xvfb** is a virtual screen. It draws into memory, so a headed Chrome can run on a machine with no monitor. Headed matters here: sites behave differently when they detect headless Chrome, a person can later watch or take over the same screen (Phase 7), and the desktop half of this task (2.9b) needs a real screen that other apps can use as well.
-- **Openbox** is a light window manager. Without a window manager nothing manages focus, stacking or window placement. Chrome can run that way, but window behaviour is less predictable, so a fixed manager keeps it the same on every machine. Openbox also provides the multiple desktops that 2.9b may use.
+- **Openbox** is a light window manager. Without a window manager nothing manages focus, stacking or window placement. Chrome can run that way, but window behaviour is less predictable, so a fixed manager keeps it the same on every machine.
 
-Neither does anything for a bot directly. The daemon starts them first, then Chrome, and stops them in reverse order.
+Neither does anything for a bot directly. `DisplayHost` starts them, plus a session bus and the accessibility bus, the first time a browser or a desktop app needs the screen. Chrome starts after that. The same screen is what desktop apps use (see [phase-2-9b.md](phase-2-9b.md)).
 
 ## The pieces
 
-- **`BrowserHost`** (`apps/daemon/src/browser.ts`) starts Xvfb, Openbox and Chrome the first time any bot needs a browser, and brings Chrome back if it dies. Chrome gets a free debugging port. The host records a generation id and the child pids in `host.json`, so a crashed daemon's leftovers are found and stopped on the next start. A new Chrome gets a new generation. On shutdown it asks Chrome to quit through CDP first so cookies are written to disk, then stops the helpers.
+- **`BrowserHost`** (`apps/daemon/src/browser.ts`) starts Chrome on the shared display the first time any bot needs a browser, and brings Chrome back if it dies. Chrome gets a free debugging port. The host records a generation id and Chrome's pid in `host.json`, so a crashed daemon's Chrome is found and stopped on the next start. A new Chrome gets a new generation. On shutdown it asks Chrome to quit through CDP first so cookies are written to disk. The display stays up until the daemon stops it.
 - **The `browser` shim** (`apps/daemon/src/browser-cli.ts`) is on the bot's `PATH` like the schedule CLI. It finds the daemon the same way, from `.companion/schedule.json`, asks for the debugging port and a per-bot session name, makes sure the bot has a window, and then runs the bundled `agent-browser` pinned to it. A refused flag or command (`--session`, `--cdp`, `--profile`, `--headed`, `--pin-tab`, `close`, `connect`, `cookies clear` and the like) fails with a message telling the bot what to do instead.
 - **A per-bot lock** (`.companion/browser.lock`) serialises one bot's browser commands, so two overlapping tool calls cannot interleave. The lock goes stale if its process is gone or it is older than ten minutes.
 - **The window** is opened by the daemon with the CDP call `Target.createTarget` and `newWindow: true`. That keeps the window in Chrome's default context, which is the one that holds the shared logins. The shim then binds the bot's session to that tab. When the generation changes after a Chrome restart, the shim drops the stale session and opens a fresh window. `browser window new` does the same for a bot whose tab is gone.
@@ -53,7 +54,7 @@ The choice of agent-browser over Playwright CLI is recorded in [adr/0002-browser
 
 Unit tests use a fake daemon and a recording runner. They cover the first-command window and pin, a new generation, a failed window open, every refusal, the offline commands, serialisation, stale lock takeover, and `window new`.
 
-The integration test needs `Xvfb`, `openbox` and a Chrome on the machine and skips itself otherwise. It runs a local fake site and two bots at once through the real daemon and the real shim. Each bot books through a form, hits the validation error, and corrects it. Neither sees the other's page, one bot's login is visible to the other, and the login survives a daemon restart.
+The integration test needs `Xvfb`, `openbox`, `dbus-daemon` and a Chrome on the machine and skips itself otherwise. It runs a local fake site and two bots at once through the real daemon and the real shim. Each bot books through a form, hits the validation error, and corrects it. Neither sees the other's page, one bot's login is visible to the other, and the login survives a daemon restart.
 
 ```bash
 pnpm exec vitest run apps/daemon/tests/browser-cli.test.ts apps/daemon/tests/browser.test.ts
@@ -71,4 +72,4 @@ The harness that produced the ADR's numbers is not kept in the tree, because it 
 
 ## Not done here
 
-No desktop, no non-browser app, and no per-bot virtual desktops. Live view and takeover are Phase 7. `agent-browser` is installed as a daemon dependency, so a machine does not need it on `PATH`, but Chrome, Xvfb and Openbox must be installed on the host.
+Desktop apps are [phase-2-9b.md](phase-2-9b.md). Live view and takeover are Phase 7. `agent-browser` is installed as a daemon dependency, so a machine does not need it on `PATH`, but Chrome, Xvfb, Openbox and dbus must be installed on the host.

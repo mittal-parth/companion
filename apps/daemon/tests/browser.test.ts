@@ -17,7 +17,7 @@ import { startFixtureSite } from "./fixture-site.js";
 import { installBrowserShim, type Engine } from "../src/engine.js";
 
 const chrome = process.env.COMPANION_CHROME ?? "google-chrome";
-const installed = ["Xvfb", "openbox", chrome].every(
+const installed = ["Xvfb", "openbox", "dbus-daemon", chrome].every(
   (program) => spawnSync("which", [program]).status === 0,
 );
 
