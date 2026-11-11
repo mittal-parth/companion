@@ -1,10 +1,10 @@
 /**
- * Proves two bots can each fill a real window on the shared screen without
- * ending up in each other's window. It needs no model. It is skipped where the
- * display, the accessibility bus or the form's toolkit is not installed.
+ * Proves two bots can each write in their own window on the shared screen
+ * without ending up in each other's window. It needs no model. It is skipped
+ * where the display, the accessibility bus or mousepad is not installed.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -17,14 +17,13 @@ import { installDesktopShim, type Engine } from "../src/engine.js";
 
 const atspi = "/usr/libexec/at-spi-bus-launcher";
 const installed =
-  ["Xvfb", "openbox", "dbus-daemon", "python3", "mousepad"].every(
+  ["Xvfb", "openbox", "dbus-daemon", "mousepad"].every(
     (program) => spawnSync("which", [program]).status === 0,
-  ) &&
-  spawnSync("test", ["-x", atspi]).status === 0 &&
-  spawnSync("python3", ["-c", "import gi"]).status === 0;
+  ) && spawnSync("test", ["-x", atspi]).status === 0;
+const calculator = spawnSync("which", ["galculator"]).status === 0;
 
 test.skipIf(!installed)(
-  "two bots fill their own forms at the same time and the daemon stops the apps",
+  "two bots write in their own windows at the same time and the daemon stops the apps",
   async () => {
     const directory = mkdtempSync(join(tmpdir(), "companion-desktop-"));
     const daemon = await startDaemon(options(directory));
@@ -36,19 +35,16 @@ test.skipIf(!installed)(
       const adaRun = (args: string[]) => desktop(shim, ada.directory, args);
       const bobRun = (args: string[]) => desktop(shim, bob.directory, args);
 
+      const adaSentence = "Ada writes 4419.";
+      const bobSentence = "Bob writes 8821.";
       const [adaText, bobText] = await Promise.all([
-        fill(adaRun, "Ada"),
-        fill(bobRun, "Bob"),
+        writeNote(adaRun, ada.directory, adaSentence),
+        writeNote(bobRun, bob.directory, bobSentence),
       ]);
-      const adaResult = result(ada.directory);
-      const bobResult = result(bob.directory);
-      expect(adaResult.name).toBe("Ada");
-      expect(bobResult.name).toBe("Bob");
-      expect(adaResult.code).not.toBe(bobResult.code);
-      expect(adaText).toContain(adaResult.code);
-      expect(adaText).not.toContain(bobResult.code);
-      expect(bobText).toContain(bobResult.code);
-      expect(bobText).not.toContain(adaResult.code);
+      expect(adaText).toContain(adaSentence);
+      expect(adaText).not.toContain(bobSentence);
+      expect(bobText).toContain(bobSentence);
+      expect(bobText).not.toContain(adaSentence);
 
       const shot = await adaRun(["screenshot"]);
       expect(shot.code, shot.stderr).toBe(0);
@@ -102,7 +98,7 @@ test.skipIf(!installed)(
       display,
     });
     try {
-      const window = await first.launch("bot-a", "form", undefined, bot);
+      const window = await first.launch("bot-a", "mousepad", undefined, bot);
       expect(alive(window.pid)).toBe(true);
       // The host is abandoned the way a crashed daemon is: no close.
       const second = createDesktopHost({
@@ -114,6 +110,32 @@ test.skipIf(!installed)(
       await second.close();
     } finally {
       await display.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!installed || !calculator)(
+  "a bot can open the calculator",
+  async () => {
+    const directory = mkdtempSync(join(tmpdir(), "companion-desktop-calc-"));
+    const daemon = await startDaemon(options(directory));
+    try {
+      const ada = await createBot(daemon, "Ada");
+      installDesktopShim(join(directory, "bin"));
+      const opened = JSON.parse(
+        await ok(
+          desktop(join(directory, "bin", "desktop"), ada.directory, [
+            "launch",
+            "galculator",
+          ]),
+        ),
+      ) as { app: string; windowId: string };
+      expect(opened.app).toBe("galculator");
+      expect(opened.windowId.length).toBeGreaterThan(0);
+    } finally {
+      await daemon.close();
       rmSync(directory, { recursive: true, force: true });
     }
   },
@@ -164,32 +186,33 @@ function desktop(shim: string, cwd: string, args: string[]): Promise<Result> {
 }
 
 /**
- * Fills the form the way a bot would: a rejected submit, then the terms, then
- * the name, then the confirmation. Returns the window text afterwards.
+ * Types into a Mousepad window the way a bot would, and returns the window
+ * text afterwards. The sentence is what proves the windows stayed apart.
  */
-async function fill(
+async function writeNote(
   run: (args: string[]) => Promise<Result>,
-  name: string,
+  directory: string,
+  sentence: string,
 ): Promise<string> {
-  const opened = JSON.parse(await ok(run(["launch", "form"]))) as {
+  writeFileSync(join(directory, "note.txt"), "");
+  const opened = JSON.parse(
+    await ok(run(["launch", "mousepad", "note.txt"])),
+  ) as {
     windowId: string;
   };
   const id = opened.windowId;
-  const interactive = () =>
-    ok(run(["snapshot", "--window-id", id, "-i", "--compact"]));
-  let text = await interactive();
-  await ok(run(["click", "--window-id", id, ref(text, "button", "Submit")]));
-  expect(await ok(run(["snapshot", "--window-id", id]))).toContain(
-    "Please accept the terms",
+  const text = await ok(
+    run(["snapshot", "--window-id", id, "-i", "--compact"]),
   );
-  text = await interactive();
   await ok(
-    run(["set-value", "--window-id", id, ref(text, "text", undefined), name]),
+    run([
+      "set-value",
+      "--window-id",
+      id,
+      ref(text, "textfield", undefined),
+      sentence,
+    ]),
   );
-  text = await interactive();
-  await ok(run(["check", "--window-id", id, ref(text, "check", undefined)]));
-  text = await interactive();
-  await ok(run(["click", "--window-id", id, ref(text, "button", "Submit")]));
   return ok(run(["snapshot", "--window-id", id]));
 }
 
@@ -222,12 +245,6 @@ function ref(output: string, role: string, name: string | undefined): string {
     throw new Error(`No ${role} in ${output.slice(0, 500)}`);
   }
   return match.ref;
-}
-
-function result(directory: string): { code: string; name: string } {
-  return JSON.parse(
-    readFileSync(join(directory, ".companion", "desktop-form.json"), "utf8"),
-  ) as { code: string; name: string };
 }
 
 async function ok(resultPromise: Promise<Result>): Promise<string> {

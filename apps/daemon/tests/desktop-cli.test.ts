@@ -29,10 +29,10 @@ afterEach(() => {
 
 const window = {
   windowId: "w1",
-  app: "form",
-  toolApp: "python3.12",
+  app: "mousepad",
+  toolApp: "mousepad",
   pid: 40,
-  title: "Companion form",
+  title: "note.txt - Mousepad",
 };
 
 function fixture(windows = [window]) {
@@ -77,7 +77,7 @@ function fixture(windows = [window]) {
           output: JSON.stringify({
             ok: true,
             data: [
-              { pid: 40, title: "Companion form" },
+              { pid: 40, title: "note.txt - Mousepad" },
               { pid: 99, title: "Other" },
             ],
           }),
@@ -121,13 +121,13 @@ test("a snapshot is pinned to the bot's only window and session", async () => {
 
 test("launch asks the daemon and does not run the desktop tool", async () => {
   const { context, calls, printed, errors, requests } = fixture();
-  expect(await runDesktopCli(["launch", "form"], context)).toBe(0);
+  expect(await runDesktopCli(["launch", "mousepad"], context)).toBe(0);
   expect(calls).toEqual([]);
   expect(printed.join("")).toContain("w1");
   expect(errors.join("")).toContain("snapshot");
   expect(requests.at(-1)).toEqual({
     url: "http://daemon.test/agent/desktop/launch",
-    body: JSON.stringify({ app: "form" }),
+    body: JSON.stringify({ app: "mousepad" }),
   });
 });
 
@@ -142,15 +142,20 @@ test("a file outside the bot's folder is refused before launch", async () => {
   );
 });
 
-test("headed input, the raw launch, and the clipboard are refused", async () => {
+test("headed input and an app outside the list are refused", async () => {
   const { context, calls, errors } = fixture();
   expect(await runDesktopCli(["snapshot", "--headed"], context)).toBe(1);
   expect(await runDesktopCli(["launch", "xterm"], context)).toBe(1);
-  expect(await runDesktopCli(["clipboard-get"], context)).toBe(1);
+  expect(await runDesktopCli(["mouse-click", "1", "1"], context)).toBe(1);
   expect(calls).toEqual([]);
   expect(errors.join("")).toContain("pointer");
-  expect(errors.join("")).toContain("desktop launch form");
-  expect(errors.join("")).toContain("clipboard");
+  expect(errors.join("")).toContain("desktop launch mousepad");
+});
+
+test("the clipboard is passed through, because the bot is allowed to use it", async () => {
+  const { context, calls } = fixture();
+  expect(await runDesktopCli(["clipboard-get"], context)).toBe(0);
+  expect(calls).toEqual([["--session", "bot-one", "clipboard-get"]]);
 });
 
 test("another bot's window is refused", async () => {
@@ -195,7 +200,9 @@ test("a window list hides the other bot", async () => {
   const listed = JSON.parse(printed.join("")) as {
     data: Array<{ title: string }>;
   };
-  expect(listed.data.map((entry) => entry.title)).toEqual(["Companion form"]);
+  expect(listed.data.map((entry) => entry.title)).toEqual([
+    "note.txt - Mousepad",
+  ]);
 });
 
 test("two commands wait for the one desktop lock", async () => {

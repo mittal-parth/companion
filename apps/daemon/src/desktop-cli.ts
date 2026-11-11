@@ -3,8 +3,9 @@
  *
  * It is agent-desktop pointed at the shared screen, limited to the windows this
  * bot opened. One lock covers the whole desktop, so two bots cannot type at the
- * same time. Commands and flags that would reach another bot's windows, the
- * pointer, or the shared clipboard are refused. Web pages stay on `browser`.
+ * same time. Commands and flags that would reach another bot's windows or move
+ * the shared pointer are refused. The clipboard is available, and it is shared.
+ * Web pages stay on `browser`.
  */
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -23,12 +24,17 @@ import type {
   DesktopSession,
   DesktopWindow,
 } from "@companion/shared";
-// A `.ts` specifier, because Node runs this file directly when a bot types `desktop`.
+// `.ts` specifiers, because Node runs this file directly when a bot types `desktop`.
+import {
+  desktopAppNames,
+  desktopLaunchUsage,
+  isDesktopApp,
+} from "./desktop-apps.ts";
 import { readAccess } from "./schedule-cli.ts";
 
-const usage = `desktop launch form
-desktop launch mousepad [file]
-desktop windows
+const launchHint = `desktop launch ${desktopAppNames.join(" or desktop launch ")}`;
+
+const usage = `${desktopLaunchUsage}desktop windows
 desktop close [window-id]
 desktop <command> [arguments]
 Drives an application on the shared screen. The commands are agent-desktop's.
@@ -70,9 +76,6 @@ const blockedFlags = new Set([
 const blockedCommands = new Set([
   "launch",
   "close-app",
-  "clipboard-get",
-  "clipboard-set",
-  "clipboard-clear",
   "key-down",
   "key-up",
   "mouse-down",
@@ -241,12 +244,9 @@ function refusalFor(argv: string[]): string | undefined {
   if (command === "close-app") {
     return 'Use "desktop close" to close a window you opened.';
   }
-  if (command.startsWith("clipboard")) {
-    return "The clipboard is shared by every bot, so it is not available.";
-  }
   if (blockedCommands.has(command)) {
     return command === "launch"
-      ? 'Use "desktop launch form" or "desktop launch mousepad" to start an app.'
+      ? `Use ${launchHint} to start an app.`
       : `"${command}" is not available here. It would affect the whole desktop.`;
   }
   return undefined;
@@ -324,8 +324,7 @@ function scopeArgs(
     if (only !== undefined) windowId = only.windowId;
     else if (matches.length === 0) {
       return {
-        error:
-          "You have no window yet. Start one with desktop launch form or desktop launch mousepad.",
+        error: `You have no window yet. Start one with ${launchHint}.`,
       };
     } else {
       return {
@@ -406,7 +405,7 @@ function withoutApp(argv: string[]): string[] {
 
 function windowList(windows: readonly DesktopWindow[]): string {
   if (windows.length === 0) {
-    return "You have no windows. Start one with desktop launch form or desktop launch mousepad.";
+    return `You have no windows. Start one with ${launchHint}.`;
   }
   return windows
     .map((window) => `${window.windowId}  ${window.app}  ${window.title}`)
@@ -429,16 +428,28 @@ async function launch(
 ): Promise<number> {
   const [app, file, extra] = argv;
   if (app === undefined || extra !== undefined) {
+    context.printError(desktopLaunchUsage);
+    return 1;
+  }
+  if (!isDesktopApp(app)) {
     context.printError(
-      "Usage: desktop launch form   or   desktop launch mousepad [file]\n",
+      `desktop launch only starts ${desktopAppNames.join(" or ")}.\n${desktopLaunchUsage}`,
     );
     return 1;
   }
-  if (app !== "form" && app !== "mousepad") {
-    context.printError(
-      "desktop launch only starts form or mousepad.\nUsage: desktop launch form   or   desktop launch mousepad [file]\n",
-    );
-    return 1;
+  switch (app) {
+    case "mousepad":
+      break;
+    case "galculator":
+      if (file !== undefined) {
+        context.printError("galculator does not open a file.\n");
+        return 1;
+      }
+      break;
+    default: {
+      const unexpected: never = app;
+      throw new Error(`Unknown app ${String(unexpected)}.`);
+    }
   }
   if (file !== undefined && fileInside(access.folder, file) === undefined) {
     context.printError("That file is outside your folder.\n");

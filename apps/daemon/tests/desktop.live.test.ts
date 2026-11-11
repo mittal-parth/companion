@@ -1,9 +1,10 @@
 /**
- * Proves a real bot finishes a task in a window that is not a browser, and
- * that it cannot drive the screen with xdotool. Skipped unless COMPANION_LIVE=1,
- * so CI does not call the provider.
+ * Proves a real bot finishes a task in a window that is not a browser.
+ * Skipped unless COMPANION_LIVE=1, so CI does not call the provider.
+ * The permission that denies xdotool is covered by the engine unit test.
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -17,9 +18,10 @@ import {
 } from "./helpers.js";
 
 const live = process.env.COMPANION_LIVE === "1";
+const sentence = "The oak code is 4419.";
 
 test.skipIf(!live)(
-  "a bot completes the form and cannot run xdotool",
+  "a bot writes a sentence in Mousepad",
   async () => {
     requireOpencode();
     const directory = mkdtempSync(join(tmpdir(), "companion-desktop-live-"));
@@ -29,35 +31,23 @@ test.skipIf(!live)(
     });
     try {
       const bot = await createLiveBot(daemon, "Desk");
+      writeFileSync(join(bot.directory, "note.txt"), "");
       const filled = await askBot(
         daemon,
         bot.id,
-        "Use the desktop command to open the form. Enter the name Priya Nair, accept the terms, and submit. The form rejects a submit until the terms are accepted. Reply with the confirmation code the window shows.",
+        `Use the desktop command to open mousepad on note.txt in your folder. Type exactly this sentence into the document: ${sentence} Leave the window open. Reply with the sentence once it is in the editor.`,
       );
       expect(hasToolCall(filled.updates), JSON.stringify(filled.events)).toBe(
         true,
       );
-      const saved = JSON.parse(
-        readFileSync(
-          join(bot.directory, ".companion", "desktop-form.json"),
-          "utf8",
-        ),
-      ) as { code?: string; name?: string };
-      expect(saved.name).toBe("Priya Nair");
-      expect(saved.code).toMatch(/^CF-/);
-      expect(filled.reply, JSON.stringify(filled.events)).toContain(saved.code);
-
-      const raw = await askBot(
-        daemon,
-        bot.id,
-        "Run the shell command `xdotool getmouselocation` and tell me exactly what happened. Do not use the desktop command for this.",
+      expect(filled.reply, JSON.stringify(filled.events)).toContain("4419");
+      const seen = await desktop(
+        join(directory, "bin", "desktop"),
+        bot.directory,
+        ["snapshot", "-i", "--compact"],
       );
-      const failed = raw.updates.some(
-        (update) =>
-          update.sessionUpdate === "tool_call_update" &&
-          update.status === "failed",
-      );
-      expect(failed, JSON.stringify(raw.events)).toBe(true);
+      expect(seen.code, `${seen.stdout}\n${seen.stderr}`).toBe(0);
+      expect(seen.stdout).toContain(sentence);
     } finally {
       await daemon.close();
       rmSync(directory, { recursive: true, force: true });
@@ -65,3 +55,21 @@ test.skipIf(!live)(
   },
   900_000,
 );
+
+/** Runs the `desktop` command from inside the bot's folder. */
+function desktop(
+  shim: string,
+  cwd: string,
+  args: string[],
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(shim, args, { cwd });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    child.once("exit", (code) => {
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+  });
+}

@@ -16,14 +16,14 @@ import type {
   DesktopSession,
   DesktopWindow,
 } from "@companion/shared";
+import {
+  desktopAppNames,
+  isDesktopApp,
+  type DesktopAppName,
+} from "./desktop-apps.js";
 import type { DisplayHost } from "./display.js";
 import { reapLeftovers } from "./display.js";
 import { exited, stopChild } from "./engine.js";
-
-/** The apps a bot is allowed to start. Anything else would be a shell. */
-export const desktopAppNames = ["form", "mousepad"] as const;
-
-export type DesktopAppName = (typeof desktopAppNames)[number];
 
 /** Starts and stops the apps a bot is allowed to use. */
 export type DesktopHost = {
@@ -69,15 +69,15 @@ type ListedWindow = {
 
 const windowWaitMs = 15_000;
 
+/** A program that failed to start, keyed so a missing binary does not crash the daemon. */
+const startErrors = new WeakMap<ChildProcess, NodeJS.ErrnoException>();
+
 /**
  * Creates the host. No app starts until `launch` is called, and the screen
  * starts on the first `session` or `lease`.
  */
 export function createDesktopHost(options: DesktopHostOptions): DesktopHost {
   const stateFile = join(options.directory, "host.json");
-  const formScript = fileURLToPath(
-    new URL("../fixtures/desktop-form.py", import.meta.url),
-  );
   let apps: AppRecord[] = [];
   let reaped = false;
   let generation: string | undefined;
@@ -127,7 +127,7 @@ export function createDesktopHost(options: DesktopHostOptions): DesktopHost {
       JSON.stringify({
         processes: apps.map((app) => ({
           pid: app.pid,
-          name: app.app === "form" ? "desktop-form.py" : "mousepad",
+          name: app.app,
         })),
       }),
     );
@@ -221,38 +221,33 @@ export function createDesktopHost(options: DesktopHostOptions): DesktopHost {
     launch(botId, app, file, botDirectory) {
       return exclusive(async () => {
         const name = desktopApp(app);
-        if (name === "form" && file !== undefined) {
-          throw new Error("desktop launch form takes no file.");
-        }
-        const opened =
-          name === "mousepad" && file !== undefined
-            ? fileInside(botDirectory, file)
-            : undefined;
+        const opened = openedFile(name, file, botDirectory);
         const base = sessionFor(botId, await screen());
         const before = new Set(
           (await listWindows(base)).map((window) => window.id),
         );
         const child = spawnApp(name, {
           base,
-          formScript,
           botId,
-          botDirectory,
           directory: options.directory,
           file: opened,
         });
         const pid = child.pid;
         if (pid === undefined) {
+          await new Promise((resolve) => setImmediate(resolve));
+          const failed = startErrors.get(child);
           stopChild(child);
+          if (failed?.code === "ENOENT") {
+            throw new Error(`${name} is not installed.`);
+          }
           throw new Error("The app did not start.");
         }
         apps.push({ botId, app: name, pid, child });
         writeState();
         try {
-          const appeared = await waitForWindows(
-            base,
-            before,
-            () => !alive(pid),
-          );
+          const appeared = await waitForWindows(base, before, () => {
+            return startErrors.has(child) || !alive(pid);
+          });
           const owned = appeared.filter((window) => window.pid === pid);
           const windows = owned.length > 0 ? owned : appeared;
           const primary =
@@ -268,7 +263,11 @@ export function createDesktopHost(options: DesktopHostOptions): DesktopHost {
             title: primary.title,
           };
         } catch (error) {
+          const failed = startErrors.get(child);
           await stopApp({ botId, app: name, pid, child });
+          if (failed?.code === "ENOENT") {
+            throw new Error(`${name} is not installed.`);
+          }
           throw error;
         }
       });
@@ -309,12 +308,32 @@ export function createDesktopHost(options: DesktopHostOptions): DesktopHost {
 }
 
 function desktopApp(app: string): DesktopAppName {
+  if (!isDesktopApp(app)) {
+    throw new Error(
+      `desktop launch only starts ${desktopAppNames.join(" or ")}.`,
+    );
+  }
+  return app;
+}
+
+/** The file a launch opens, or nothing. A path has to stay inside the bot's folder. */
+function openedFile(
+  app: DesktopAppName,
+  file: string | undefined,
+  botDirectory: string,
+): string | undefined {
   switch (app) {
-    case "form":
     case "mousepad":
-      return app;
-    default:
-      throw new Error("desktop launch only starts form or mousepad.");
+      return file === undefined ? undefined : fileInside(botDirectory, file);
+    case "galculator":
+      if (file !== undefined) {
+        throw new Error("galculator does not open a file.");
+      }
+      return undefined;
+    default: {
+      const unexpected: never = app;
+      throw new Error(`Unknown app ${String(unexpected)}.`);
+    }
   }
 }
 
@@ -332,9 +351,7 @@ function spawnApp(
   app: DesktopAppName,
   input: {
     base: DesktopSession;
-    formScript: string;
     botId: string;
-    botDirectory: string;
     directory: string;
     file: string | undefined;
   },
@@ -344,27 +361,14 @@ function spawnApp(
     DISPLAY: input.base.display,
     DBUS_SESSION_BUS_ADDRESS: input.base.dbusAddress,
   };
+  let child: ChildProcess;
   switch (app) {
-    case "form": {
-      const result = join(
-        input.botDirectory,
-        ".companion",
-        "desktop-form.json",
-      );
-      mkdirSync(dirname(result), { recursive: true });
-      rmSync(result, { force: true });
-      return spawn("python3", [input.formScript, result, "Companion form"], {
-        env,
-        detached: true,
-        stdio: "ignore",
-      });
-    }
     case "mousepad": {
       // A fresh config, so a crashed editor does not ask to restore a session,
       // and one bot's settings are not the other's.
       const configHome = join(input.directory, "mousepad", input.botId);
       mkdirSync(configHome, { recursive: true });
-      return spawn(
+      child = spawn(
         "mousepad",
         ["--disable-server", ...(input.file === undefined ? [] : [input.file])],
         {
@@ -373,12 +377,24 @@ function spawnApp(
           stdio: "ignore",
         },
       );
+      break;
     }
+    case "galculator":
+      child = spawn("galculator", [], {
+        env,
+        detached: true,
+        stdio: "ignore",
+      });
+      break;
     default: {
       const unexpected: never = app;
       throw new Error(`Unknown app ${String(unexpected)}.`);
     }
   }
+  child.once("error", (error: NodeJS.ErrnoException) => {
+    startErrors.set(child, error);
+  });
+  return child;
 }
 
 /** Polls until a window exists that was not there before the launch. */

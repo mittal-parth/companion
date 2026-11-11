@@ -39,7 +39,7 @@ Several `xdotool` runs saved the PNG outside the bot's folder. The read was deni
 
 ## Why agent-desktop
 
-We run one screen for every bot, shared with Chrome (see [phase-2-9b.md](../phase-2-9b.md)). Two bots have to be able to work at the same moment without typing into each other's window.
+We run one screen for every bot, shared with Chrome (see [phase-2-9.md](../phase-2-9.md)). Two bots have to be able to work at the same moment without typing into each other's window.
 
 agent-desktop binds a session to the bot and accepts `--window-id` on snapshot, screenshot, press and focus. A ref such as `click @e3` names an element in that bot's snapshot and does not move the pointer. Our `desktop` command uses that, and holds one lock for the whole screen because a key, a raise and a covered-window screenshot are still global.
 
@@ -49,7 +49,7 @@ Other points that favoured agent-desktop:
 
 - `skills get desktop` prints the workflow the bot needs, so the bot learns it on demand.
 - It is a native binary, so a command does not start Node, which matters when a bot makes several calls per task.
-- Its blocked-by-us surface is the flags and commands that would move the shared pointer or escape the bot's windows: `--headed`, `--session`, `--screen`, the clipboard, and the mouse commands.
+- Its blocked-by-us surface is the flags and commands that would move the shared pointer or escape the bot's windows: `--headed`, `--session`, `--screen`, and the mouse commands. The clipboard is available. It is one clipboard for the whole screen, so a bot can read what another bot copied.
 
 What it costs us:
 
@@ -59,4 +59,4 @@ What it costs us:
 
 ## When to revisit
 
-`xdotool` plus the vision subagent is the better fit if the main model can already see, or if a snapshot of a real application grows past the point where the extra context costs more than the extra calls. The harness is `apps/daemon/tests/desktop-compare.live.test.ts`. It is skipped unless `COMPANION_COMPARE=1`. `COMPARE_RUNS`, `COMPARE_TOOLS` and `COMPARE_TASKS` narrow it, and `COMPARE_OUT` names the JSON file.
+`xdotool` plus the vision subagent is the better fit if the main model can already see, or if a snapshot of a real application grows past the point where the extra context costs more than the extra calls. The harness is not in the tree. It is in commit `bd776bb` (`apps/daemon/tests/desktop-compare.live.test.ts`) if the comparison needs repeating.
