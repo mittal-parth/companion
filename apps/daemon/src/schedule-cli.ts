@@ -186,15 +186,22 @@ function finish(
   return code;
 }
 
-function readAccess(
+/**
+ * Finds the daemon's address and this bot's token from anywhere inside the
+ * bot's folder. `folder` is the bot's `.companion` directory, where other
+ * commands keep their own state.
+ */
+export function readAccess(
   cwd: string,
-): { ok: true; access: ScheduleAccess } | { ok: false; error: string } {
+):
+  | { ok: true; access: ScheduleAccess; folder: string }
+  | { ok: false; error: string } {
   const file = findAccessFile(cwd);
   if (file === undefined) {
     return {
       ok: false,
       error:
-        "This directory is not inside a bot folder, so there is no schedule access here.",
+        "This directory is not inside a bot folder, so there is no daemon access here.",
     };
   }
   let parsed: unknown;
@@ -212,7 +219,11 @@ function readAccess(
   ) {
     return { ok: false, error: `${file} has no daemon url and token.` };
   }
-  return { ok: true, access: { url: parsed.url, token: parsed.token } };
+  return {
+    ok: true,
+    access: { url: parsed.url, token: parsed.token },
+    folder: dirname(file),
+  };
 }
 
 /** Walks up from `cwd` to the filesystem root looking for the access file. */

@@ -15,7 +15,7 @@ Name and avatar can change later. There is no avatar yet, and no route that rena
 The scripted tests cover two folders, the opening prompt, a daemon that does not write the two files, and two turns in flight. The live test starts OpenCode twice at once, checks that each bot wrote only its own code word into `AGENTS.md` and `MEMORY.md`, restarts the daemon, and asks both bots to read their files. It reads `MEMORY.md` again after that reply.
 
 ```bash
-COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/src/api.live.test.ts
+COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/tests/api.live.test.ts
 ```
 
 `opencode` must be on `PATH`, or set `OPENCODE_BIN`.

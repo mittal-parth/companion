@@ -16,13 +16,13 @@ import {
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
-import type { BotView, TurnEvent } from "@companion/shared";
+import type { BotView } from "@companion/shared";
 import { expect, test } from "vitest";
-import { replyText } from "./acp-hello.js";
-import { startDaemon } from "./api.js";
-import { visionAgentId } from "./engine.js";
+import { replyText } from "../src/acp-hello.js";
+import { startDaemon } from "../src/api.js";
+import { visionAgentId } from "../src/engine.js";
+import { opencodeBin, parseEvents, requireOpencode } from "./helpers.js";
 
-const opencodeBin = process.env.OPENCODE_BIN ?? "opencode";
 const live = process.env.COMPANION_LIVE === "1";
 
 const glyphs: Record<string, string[]> = {
@@ -252,11 +252,7 @@ test.skipIf(!canPaint)("the painted code is not stored as text", () => {
 test.skipIf(!live)(
   "a pasted code is read by the vision subagent",
   async () => {
-    if (
-      spawnSync(opencodeBin, ["--version"], { encoding: "utf8" }).status !== 0
-    ) {
-      throw new Error(`COMPANION_LIVE=1 but ${opencodeBin} did not start.`);
-    }
+    requireOpencode();
     const code = paintedCode();
     const png = paintedImage(code);
     const directory = mkdtempSync(join(tmpdir(), "companion-live-image-"));
@@ -297,38 +293,6 @@ test.skipIf(!live)(
   },
   480_000,
 );
-
-function parseEvents(body: string): TurnEvent[] {
-  const events: TurnEvent[] = [];
-  for (const block of body.split("\n\n")) {
-    if (block.trim() === "") continue;
-    let name = "";
-    const data: string[] = [];
-    for (const line of block.split("\n")) {
-      if (line.startsWith("event:")) name = line.slice("event:".length).trim();
-      if (line.startsWith("data:"))
-        data.push(line.slice("data:".length).trim());
-    }
-    const payload: unknown = JSON.parse(data.join("\n"));
-    if (name === "update") {
-      events.push({ event: "update", data: payload as acp.SessionUpdate });
-      continue;
-    }
-    if (name === "done") {
-      events.push({
-        event: "done",
-        data: payload as { stopReason: acp.StopReason },
-      });
-      continue;
-    }
-    if (name === "error") {
-      events.push({ event: "error", data: payload as { error: string } });
-      continue;
-    }
-    throw new Error(`Unexpected event ${name}.`);
-  }
-  return events;
-}
 
 type SeenCall = {
   name?: string;

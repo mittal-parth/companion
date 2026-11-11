@@ -43,5 +43,5 @@ Two behaviors are deferred:
 The check uses the real clock and a scripted engine. One schedule is a couple of seconds out. The cron and the interval wait for a real minute.
 
 ```bash
-pnpm exec vitest run apps/daemon/src/scheduler.test.ts
+pnpm exec vitest run apps/daemon/tests/scheduler.test.ts
 ```

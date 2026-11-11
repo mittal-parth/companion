@@ -14,9 +14,9 @@ import {
   type ScheduleLogEntry,
 } from "@companion/shared";
 import { expect, test } from "vitest";
-import { startDaemon, type Daemon } from "./api.js";
-import type { Engine } from "./engine.js";
-import { openThreadStore } from "./thread-store.js";
+import { startDaemon, type Daemon } from "../src/api.js";
+import type { Engine } from "../src/engine.js";
+import { openThreadStore } from "../src/thread-store.js";
 
 const weather = "Check the weather and tell me if I need an umbrella.";
 const umbrella: acp.SessionUpdate = {

@@ -61,3 +61,13 @@ _Avoid_: permission
 **Schedule**:
 A rule that sends one prompt into a bot's conversation at later times. It is a calendar cron, an elapsed interval, or a single instant. The maths names each occurrence; the daemon fires it later. A schedule can be paused: while it is, nothing fires, no receipt is written, and the slots it misses are not caught up. The bot manages its own schedules by running the `schedule` command.
 _Avoid_: job, routine
+
+## Browser
+
+**Shared browser**:
+The one headed Chrome and profile that every bot on a machine uses, so a login made by one bot is there for the others.
+_Avoid_: browser profile, session
+
+**Bot window**:
+The browser window the daemon opens in the shared browser for one bot. Every `browser` command from that bot is pinned to it.
+_Avoid_: tab, session

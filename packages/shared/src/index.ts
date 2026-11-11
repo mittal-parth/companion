@@ -165,6 +165,21 @@ export type ScheduleAccess = {
   token: string;
 };
 
+/**
+ * Where the one shared Chrome listens, as the daemon tells a bot's `browser`
+ * command. `generation` changes each time Chrome is started, so a command knows
+ * its window died with the old process and needs a new one.
+ */
+export type BrowserEndpoint = {
+  port: number;
+  generation: string;
+};
+
+/** What the daemon returns to one bot's `browser` command: the shared Chrome and its own session name. */
+export type BrowserLease = BrowserEndpoint & {
+  session: string;
+};
+
 /** One line of the schedule log, so a firing can be traced afterwards. */
 export type ScheduleLogEntry = {
   event:

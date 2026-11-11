@@ -55,9 +55,9 @@ The daemon logs each step as one JSON line on its error output, with `scope` set
 ## Tests
 
 ```bash
-pnpm exec vitest run apps/daemon/src/schedule-cli.test.ts
-pnpm exec vitest run apps/daemon/src/api.test.ts
-COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/src/schedule-cli.live.test.ts
+pnpm exec vitest run apps/daemon/tests/schedule-cli.test.ts
+pnpm exec vitest run apps/daemon/tests/api.test.ts
+COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/tests/schedule-cli.live.test.ts
 ```
 
 The CLI tests cover bad input, a token that does not belong, a schedule id from another bot, a missing daemon, and a one-time schedule that fires. The live test needs `opencode` on `PATH` (or `OPENCODE_BIN`) and `SARVAM_API_KEY`. It asks the bot for a daily 9:00 task, then to pause it and delete it.

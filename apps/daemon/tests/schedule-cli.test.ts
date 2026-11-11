@@ -17,13 +17,13 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import type { ScheduleListing } from "@companion/shared";
 import { expect, test } from "vitest";
-import { startDaemon, type Daemon } from "./api.js";
-import type { Engine } from "./engine.js";
-import { installScheduleShim } from "./engine.js";
-import { parseScheduleArgs, ScheduleUsageError } from "./schedule-cli.js";
+import { startDaemon, type Daemon } from "../src/api.js";
+import type { Engine } from "../src/engine.js";
+import { installScheduleShim } from "../src/engine.js";
+import { parseScheduleArgs, ScheduleUsageError } from "../src/schedule-cli.js";
 
 const run = promisify(execFile);
-const cli = fileURLToPath(new URL("./schedule-cli.ts", import.meta.url));
+const cli = fileURLToPath(new URL("../src/schedule-cli.ts", import.meta.url));
 const now = Date.parse("2026-11-10T12:00:00Z");
 
 const scripted: Engine = {
