@@ -56,11 +56,7 @@ COMPANION_LIVE=1 pnpm exec vitest run apps/daemon/src/browser.live.test.ts
 
 `opencode` must be on `PATH`, or set `OPENCODE_BIN`.
 
-The tool comparison behind the ADR can be re-run with `COMPANION_COMPARE=1`. `COMPARE_RUNS` sets runs per task, `COMPARE_TOOLS` picks tools, and `COMPARE_OUT` is the results file.
-
-```bash
-COMPANION_COMPARE=1 COMPARE_RUNS=3 COMPARE_OUT=/tmp/results.json pnpm exec vitest run apps/daemon/src/browser-compare.live.test.ts
-```
+The harness that produced the ADR's numbers is not kept in the tree, because it needs a second CLI installed. It is in commit `16c61dd` (`apps/daemon/src/browser-compare.live.test.ts`, with `@playwright/cli` 0.1.24 as a dev dependency) if the comparison needs repeating.
 
 ## Not done here
 

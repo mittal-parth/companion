@@ -3,7 +3,8 @@
  * creating a bot, and sending a message and reading the reply it streams.
  */
 import { spawnSync } from "node:child_process";
-import type { BotTranscript, BotView } from "@companion/shared";
+import type * as acp from "@agentclientprotocol/sdk";
+import type { BotView, TurnEvent } from "@companion/shared";
 import { expect } from "vitest";
 import type { Daemon } from "./api.js";
 
@@ -18,6 +19,7 @@ export function requireOpencode(): void {
   }
 }
 
+/** Creates a bot through the daemon API. */
 export async function createLiveBot(
   daemon: Daemon,
   name: string,
@@ -33,7 +35,7 @@ export async function createLiveBot(
 
 /** One turn: the updates the bot streamed and the words of its reply. */
 export type LiveTurn = {
-  updates: BotTranscript["updates"];
+  updates: acp.SessionUpdate[];
   reply: string;
   events: unknown[];
 };
@@ -70,29 +72,35 @@ export async function askBot(
   return { updates, reply, events };
 }
 
-type StreamEvent =
-  | { event: "update"; data: BotTranscript["updates"][number] }
-  | { event: "done"; data: { stopReason: string } }
-  | { event: "error"; data: { error: string } };
-
-function parseEvents(body: string): StreamEvent[] {
-  const events: StreamEvent[] = [];
+/** Reads the server-sent events of one streamed turn. */
+export function parseEvents(body: string): TurnEvent[] {
+  const events: TurnEvent[] = [];
   for (const block of body.split("\n\n")) {
-    const lines = block.split("\n");
-    const name = lines.find((line) => line.startsWith("event: "))?.slice(7);
-    const data = lines.find((line) => line.startsWith("data: "))?.slice(6);
-    if (name === undefined || data === undefined) continue;
-    const parsed = JSON.parse(data) as StreamEvent["data"];
-    if (name === "update") {
-      events.push({
-        event: "update",
-        data: parsed as BotTranscript["updates"][number],
-      });
-    } else if (name === "done") {
-      events.push({ event: "done", data: parsed as { stopReason: string } });
-    } else if (name === "error") {
-      events.push({ event: "error", data: parsed as { error: string } });
+    if (block.trim() === "") continue;
+    let name = "";
+    const data: string[] = [];
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) name = line.slice("event:".length).trim();
+      if (line.startsWith("data:"))
+        data.push(line.slice("data:".length).trim());
     }
+    const payload: unknown = JSON.parse(data.join("\n"));
+    if (name === "update") {
+      events.push({ event: "update", data: payload as acp.SessionUpdate });
+      continue;
+    }
+    if (name === "done") {
+      events.push({
+        event: "done",
+        data: payload as { stopReason: acp.StopReason },
+      });
+      continue;
+    }
+    if (name === "error") {
+      events.push({ event: "error", data: payload as { error: string } });
+      continue;
+    }
+    throw new Error(`Unexpected event ${name}.`);
   }
   return events;
 }

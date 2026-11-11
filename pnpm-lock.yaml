@@ -39,9 +39,6 @@ importers:
         specifier: ^11.0.0
         version: 11.0.0
     devDependencies:
-      '@playwright/cli':
-        specifier: 0.1.24
-        version: 0.1.24
       '@types/node':
         specifier: ^24.19.2
         version: 24.19.2
@@ -658,11 +655,6 @@ packages:
 
   '@oxc-project/types@0.156.0':
     resolution: {integrity: sha512-1Duyg48TdJNdyhEB8Xn1L36bT9Pv6GUtlKjHxOys8xkaF/rQq3XJE+bAurSK/AgIz5mGFsb77cn9Pb20+WCScw==}
-
-  '@playwright/cli@0.1.24':
-    resolution: {integrity: sha512-AIO0AiPHh1ZB9e+i+ZiRwSTfqlkJtWcojgtPnW/BbBCgr96OojlL15dc1jWWclfbjdwPv5900qxuDyEHghjSqw==}
-    engines: {node: '>=18'}
-    hasBin: true
 
   '@rolldown/binding-android-arm-eabi@1.2.16':
     resolution: {integrity: sha512-ia3DwAs0OsMGS7+IConptSiyk9pEXkOx/AbJ2n/lAGxH3QkWQus1t8d7gnAT38FCU2sQu8lUbeR6AiZFv4JxaA==}
@@ -2552,16 +2544,6 @@ packages:
     resolution: {integrity: sha512-nDywThFk1i4BQK4twPQ6TA4RT8bDY96yeuCVBWL3ePARCiEKDRSrNGbFIgUJpLp+XeIR65v8ra7WuJOFUBtkMA==}
     engines: {node: '>=8'}
 
-  playwright-core@1.66.0-alpha-1794252756000:
-    resolution: {integrity: sha512-AiVQEDLnkpZfEhfXOpqzZA06guT1drbfdcDbV5gePzcr/GdB/9RXnc8FrvV2YNgju0w4JERJllO24n5PmZDQ+A==}
-    engines: {node: '>=20'}
-    hasBin: true
-
-  playwright@1.66.0-alpha-1794252756000:
-    resolution: {integrity: sha512-/9xFhtBUua3Qu3ZIwg1ZoR+bNj+laHp6GxZXvc4gUN5TngCaKbIUPGTTIofnss0mRAkGfY7zUiF/xu/H2CqTFQ==}
-    engines: {node: '>=20'}
-    hasBin: true
-
   possible-typed-array-names@1.1.0:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
     engines: {node: '>= 0.4'}
@@ -3712,11 +3694,6 @@ snapshots:
   '@nolyfill/is-core-module@1.0.39': {}
 
   '@oxc-project/types@0.156.0': {}
-
-  '@playwright/cli@0.1.24':
-    dependencies:
-      playwright: 1.66.0-alpha-1794252756000
-      playwright-core: 1.66.0-alpha-1794252756000
 
   '@rolldown/binding-android-arm-eabi@1.2.16':
     optional: true
@@ -5633,12 +5610,6 @@ snapshots:
   pkg-up@3.1.0:
     dependencies:
       find-up: 3.0.0
-
-  playwright-core@1.66.0-alpha-1794252756000: {}
-
-  playwright@1.66.0-alpha-1794252756000:
-    dependencies:
-      playwright-core: 1.66.0-alpha-1794252756000
 
   possible-typed-array-names@1.1.0: {}
 

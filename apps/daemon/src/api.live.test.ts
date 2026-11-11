@@ -2,34 +2,25 @@
  * Drives one full turn through the local API with OpenCode on Sarvam GLM 5.3.
  * Skipped unless COMPANION_LIVE=1, so CI does not call the provider.
  */
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
-import type { BotTranscript, BotView, TurnEvent } from "@companion/shared";
+import type { BotTranscript, BotView } from "@companion/shared";
 import { expect, test } from "vitest";
 import { hasToolCall, replyText } from "./acp-hello.js";
 import { startDaemon } from "./api.js";
 import { standingInstructions } from "./engine.js";
+import { opencodeBin, parseEvents, requireOpencode } from "./live-support.js";
 import { openThreadStore } from "./thread-store.js";
 
-const opencodeBin = process.env.OPENCODE_BIN ?? "opencode";
 const live = process.env.COMPANION_LIVE === "1";
-
-function opencodeStarts(): boolean {
-  return (
-    spawnSync(opencodeBin, ["--version"], { encoding: "utf8" }).status === 0
-  );
-}
 
 test.skipIf(!live)(
   "a message streams a full OpenCode turn",
   async () => {
-    if (!opencodeStarts()) {
-      throw new Error(`COMPANION_LIVE=1 but ${opencodeBin} did not start.`);
-    }
+    requireOpencode();
     const directory = mkdtempSync(join(tmpdir(), "companion-live-"));
     const storePath = join(directory, "threads.db");
     const daemon = await startDaemon({
@@ -100,9 +91,7 @@ test.skipIf(!live)(
 test.skipIf(!live)(
   "a current question is answered from the free web search pool",
   async () => {
-    if (!opencodeStarts()) {
-      throw new Error(`COMPANION_LIVE=1 but ${opencodeBin} did not start.`);
-    }
+    requireOpencode();
     const directory = mkdtempSync(join(tmpdir(), "companion-live-search-"));
     const daemon = await startDaemon({
       storePath: join(directory, "threads.db"),
@@ -145,9 +134,7 @@ test.skipIf(!live)(
 test.skipIf(!live)(
   "two bots keep separate files and context",
   async () => {
-    if (!opencodeStarts()) {
-      throw new Error(`COMPANION_LIVE=1 but ${opencodeBin} did not start.`);
-    }
+    requireOpencode();
     const directory = mkdtempSync(join(tmpdir(), "companion-live-bots-"));
     const storePath = join(directory, "threads.db");
     const wordA = `marigold-${randomUUID()}`;
@@ -323,36 +310,4 @@ function expectFile(
   }
   expect(text, reply).toContain(word);
   expect(text, reply).not.toContain(other);
-}
-
-function parseEvents(body: string): TurnEvent[] {
-  const events: TurnEvent[] = [];
-  for (const block of body.split("\n\n")) {
-    if (block.trim() === "") continue;
-    let name = "";
-    const data: string[] = [];
-    for (const line of block.split("\n")) {
-      if (line.startsWith("event:")) name = line.slice("event:".length).trim();
-      if (line.startsWith("data:"))
-        data.push(line.slice("data:".length).trim());
-    }
-    const payload: unknown = JSON.parse(data.join("\n"));
-    if (name === "update") {
-      events.push({ event: "update", data: payload as acp.SessionUpdate });
-      continue;
-    }
-    if (name === "done") {
-      events.push({
-        event: "done",
-        data: payload as { stopReason: acp.StopReason },
-      });
-      continue;
-    }
-    if (name === "error") {
-      events.push({ event: "error", data: payload as { error: string } });
-      continue;
-    }
-    throw new Error(`Unexpected event ${name}.`);
-  }
-  return events;
 }

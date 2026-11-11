@@ -58,4 +58,4 @@ What it costs us:
 
 ## When to revisit
 
-Playwright CLI is the better fit for a single bot on its own browser, where its smaller cost per task is real and Firefox or WebKit may matter. If it gains a per-session tab pin, or if we give each bot its own Chrome (which breaks shared logins unless profiles are copied), this choice should be looked at again. The comparison can be re-run with the command in [phase-2-9.md](../phase-2-9.md).
+Playwright CLI is the better fit for a single bot on its own browser, where its smaller cost per task is real and Firefox or WebKit may matter. If it gains a per-session tab pin, or if we give each bot its own Chrome (which breaks shared logins unless profiles are copied), this choice should be looked at again. The harness is not in the tree; [phase-2-9.md](../phase-2-9.md) says where to find it.

@@ -15,7 +15,6 @@
     "croner": "^11.0.0"
   },
   "devDependencies": {
-    "@playwright/cli": "0.1.24",
     "@types/node": "^24.19.2"
   }
 }
