@@ -44,30 +44,22 @@ const sarvamKeyEnv = "SARVAM_API_KEY";
  */
 export const turnIdleTimeoutMs = 180_000;
 
-/** A silence watch for one turn. `stop` ends it when the turn ends. */
-export type TurnIdleWatch = {
-  /** Counts this update as progress. An open tool call holds the turn. */
-  note(update: acp.SessionUpdate): void;
-  /** Stops the watch so a finished turn is not cancelled later. */
-  stop(): void;
-};
-
 /**
  * Cancels a turn that has gone quiet.
  * The wait starts at once and resets on each session update. A tool call that
  * has not reached a final status holds the turn through a long silence.
+ * `stop` ends the watch so a finished turn is not cancelled later.
  */
 export function watchTurnIdle(
   timeoutMs: number,
   onIdle: () => void,
-): TurnIdleWatch {
+): { note(update: acp.SessionUpdate): void; stop(): void } {
   const open = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
 
   function arm(): void {
-    if (timer !== undefined) clearTimeout(timer);
-    timer = undefined;
+    clearTimeout(timer);
     if (stopped || open.size > 0) return;
     timer = setTimeout(onIdle, timeoutMs);
   }
@@ -76,49 +68,28 @@ export function watchTurnIdle(
   return {
     note(update) {
       if (stopped) return;
-      noteOpenTools(open, update);
+      if (
+        update.sessionUpdate === "tool_call" ||
+        update.sessionUpdate === "tool_call_update"
+      ) {
+        // A new tool call with no status is pending. An update with none
+        // leaves the tool call as it was.
+        const status =
+          update.status ??
+          (update.sessionUpdate === "tool_call" ? "pending" : undefined);
+        if (status === "completed" || status === "failed") {
+          open.delete(update.toolCallId);
+        } else if (status !== undefined) {
+          open.add(update.toolCallId);
+        }
+      }
       arm();
     },
     stop() {
       stopped = true;
-      if (timer !== undefined) clearTimeout(timer);
-      timer = undefined;
+      clearTimeout(timer);
     },
   };
-}
-
-/** A finished tool call no longer keeps the turn alive. */
-function toolIsFinished(status: acp.ToolCallStatus): boolean {
-  switch (status) {
-    case "completed":
-    case "failed":
-      return true;
-    case "pending":
-    case "in_progress":
-      return false;
-    default: {
-      const unexpected: never = status;
-      return String(unexpected) === "";
-    }
-  }
-}
-
-/**
- * Tracks tool calls that have started and not finished.
- * A missing status on a new tool call is pending. An update that omits the
- * status leaves the tool call as it was.
- */
-function noteOpenTools(open: Set<string>, update: acp.SessionUpdate): void {
-  if (update.sessionUpdate === "tool_call") {
-    const status = update.status ?? "pending";
-    if (toolIsFinished(status)) open.delete(update.toolCallId);
-    else open.add(update.toolCallId);
-    return;
-  }
-  if (update.sessionUpdate !== "tool_call_update") return;
-  if (update.status === undefined || update.status === null) return;
-  if (toolIsFinished(update.status)) open.delete(update.toolCallId);
-  else open.add(update.toolCallId);
 }
 
 const maxImagesPerTurn = 4;

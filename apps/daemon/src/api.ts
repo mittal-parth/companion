@@ -556,34 +556,27 @@ async function sendMessage(
   const text = requiredString(body, "text", "A message needs text.");
   const images = attachedImages(body.images);
   let started = false;
+  // A closed connection is the client leaving. It is not a failed turn.
   let detached = false;
   const detach = () => {
     detached = true;
   };
-  // A dropped socket is the client leaving. It is not a failed turn.
-  req.on("error", detach);
+  res.on("close", detach);
   res.on("error", detach);
-  res.on("close", () => {
-    if (!res.writableFinished) detach();
-  });
   const send = (event: TurnEvent) => {
     if (detached) return;
-    try {
-      if (!started) {
-        started = true;
-        res.writeHead(200, sseHeaders);
-      }
-      writeEvent(res, event);
-    } catch {
-      detach();
+    if (!started) {
+      started = true;
+      res.writeHead(200, sseHeaders);
     }
+    writeEvent(res, event);
   };
   try {
     const stopReason = await runTurn(handler, botId, text, images, (update) => {
       send({ event: "update", data: update });
     });
     send({ event: "done", data: { stopReason } });
-    endStream(res);
+    res.end();
   } catch (error) {
     if (detached) return;
     const message = httpStatus(error).message;
@@ -592,7 +585,7 @@ async function sendMessage(
       return;
     }
     send({ event: "error", data: { error: message } });
-    endStream(res);
+    res.end();
   }
 }
 
@@ -679,18 +672,8 @@ const sseHeaders = {
 };
 
 function writeEvent(res: ServerResponse, event: TurnEvent): void {
-  if (res.destroyed || res.writableEnded || !res.writable) return;
-  res.write(`event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`);
-}
-
-/** Ends the stream. A client that has already gone is left alone. */
-function endStream(res: ServerResponse): void {
   if (res.destroyed || res.writableEnded) return;
-  try {
-    res.end();
-  } catch {
-    // The client closed the connection. The turn has already been recorded.
-  }
+  res.write(`event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`);
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

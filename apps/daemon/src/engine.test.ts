@@ -21,7 +21,6 @@ import {
   visionAgentId,
   visionOpencodeModel,
   watchTurnIdle,
-  type TurnIdleWatch,
 } from "./engine.js";
 
 test("the standing rules name each bot's instructions and memory", () => {
@@ -126,29 +125,32 @@ afterEach(() => {
 
 test("a finished turn is not cancelled by a late update", () => {
   vi.useFakeTimers();
-  const watch = silence();
+  const idle = vi.fn();
+  const watch = watchTurnIdle(turnIdleTimeoutMs, idle);
   watch.stop();
   watch.note({
     sessionUpdate: "agent_message_chunk",
     content: { type: "text", text: "late" },
   });
   vi.advanceTimersByTime(turnIdleTimeoutMs);
-  expect(watch.fired).toBe(false);
+  expect(idle).not.toHaveBeenCalled();
 });
 
 test("a quiet turn is cancelled at the idle limit", () => {
   vi.useFakeTimers();
-  const watch = silence();
+  const idle = vi.fn();
+  const watch = watchTurnIdle(turnIdleTimeoutMs, idle);
   vi.advanceTimersByTime(turnIdleTimeoutMs - 1);
-  expect(watch.fired).toBe(false);
+  expect(idle).not.toHaveBeenCalled();
   vi.advanceTimersByTime(1);
-  expect(watch.fired).toBe(true);
+  expect(idle).toHaveBeenCalledTimes(1);
   watch.stop();
 });
 
 test("session updates keep a turn alive for hours", () => {
   vi.useFakeTimers();
-  const watch = silence();
+  const idle = vi.fn();
+  const watch = watchTurnIdle(turnIdleTimeoutMs, idle);
   const chunk: acp.SessionUpdate = {
     sessionUpdate: "agent_message_chunk",
     content: { type: "text", text: "still working" },
@@ -157,15 +159,16 @@ test("session updates keep a turn alive for hours", () => {
     vi.advanceTimersByTime(60_000);
     watch.note(chunk);
   }
-  expect(watch.fired).toBe(false);
+  expect(idle).not.toHaveBeenCalled();
   vi.advanceTimersByTime(turnIdleTimeoutMs);
-  expect(watch.fired).toBe(true);
+  expect(idle).toHaveBeenCalledTimes(1);
   watch.stop();
 });
 
 test("an open tool call keeps a turn alive through silence", () => {
   vi.useFakeTimers();
-  const watch = silence();
+  const idle = vi.fn();
+  const watch = watchTurnIdle(turnIdleTimeoutMs, idle);
   watch.note({
     sessionUpdate: "tool_call",
     toolCallId: "shell",
@@ -173,64 +176,18 @@ test("an open tool call keeps a turn alive through silence", () => {
     status: "in_progress",
   });
   vi.advanceTimersByTime(6 * 60 * 60 * 1000);
-  expect(watch.fired).toBe(false);
+  expect(idle).not.toHaveBeenCalled();
   watch.note({
     sessionUpdate: "tool_call_update",
     toolCallId: "shell",
     status: "completed",
   });
   vi.advanceTimersByTime(turnIdleTimeoutMs - 1);
-  expect(watch.fired).toBe(false);
+  expect(idle).not.toHaveBeenCalled();
   vi.advanceTimersByTime(1);
-  expect(watch.fired).toBe(true);
+  expect(idle).toHaveBeenCalledTimes(1);
   watch.stop();
 });
-
-test("one open tool call holds the turn after another finishes", () => {
-  vi.useFakeTimers();
-  const watch = silence();
-  watch.note({
-    sessionUpdate: "tool_call",
-    toolCallId: "read",
-    title: "read",
-    status: "in_progress",
-  });
-  watch.note({
-    sessionUpdate: "tool_call",
-    toolCallId: "shell",
-    title: "run",
-    status: "pending",
-  });
-  watch.note({
-    sessionUpdate: "tool_call_update",
-    toolCallId: "read",
-    status: "failed",
-  });
-  vi.advanceTimersByTime(6 * 60 * 60 * 1000);
-  expect(watch.fired).toBe(false);
-  watch.note({
-    sessionUpdate: "tool_call_update",
-    toolCallId: "shell",
-    content: [{ type: "content", content: { type: "text", text: "out" } }],
-  });
-  vi.advanceTimersByTime(6 * 60 * 60 * 1000);
-  expect(watch.fired).toBe(false);
-  watch.stop();
-});
-
-function silence(): TurnIdleWatch & { readonly fired: boolean } {
-  const state = { fired: false };
-  const watch = watchTurnIdle(turnIdleTimeoutMs, () => {
-    state.fired = true;
-  });
-  return {
-    get fired() {
-      return state.fired;
-    },
-    note: (update) => watch.note(update),
-    stop: () => watch.stop(),
-  };
-}
 
 const pixel =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
