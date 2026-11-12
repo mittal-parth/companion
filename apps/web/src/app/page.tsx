@@ -4,6 +4,7 @@
  * up to the person's message, and the client resumes the reply from there.
  */
 import { Chat } from "@/components/chat";
+import { AppHeader } from "@/components/theme-toggle";
 import { ensureDefaultBot } from "@/lib/daemon";
 import { transcriptToMessages } from "@/lib/converter";
 import type { UIMessage } from "ai";
@@ -14,12 +15,12 @@ export default async function Home() {
   const chat = await loadChat();
   if (!chat.ok) {
     return (
-      <main className="flex flex-1 items-center justify-center p-8">
-        <div className="flex max-w-md flex-col gap-3">
-          <h1 className="text-3xl font-semibold tracking-tight">Companion</h1>
-          <p className="text-muted-foreground">{chat.message}</p>
-        </div>
-      </main>
+      <div className="flex flex-1 flex-col">
+        <AppHeader title="Companion" />
+        <main className="flex flex-1 items-center justify-center p-8">
+          <p className="max-w-md text-muted-foreground">{chat.message}</p>
+        </main>
+      </div>
     );
   }
   return (
