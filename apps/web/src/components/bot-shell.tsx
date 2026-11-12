@@ -258,6 +258,7 @@ export function BotShell({
             ) : null}
             {chat !== null ? (
               <Chat
+                avatar={chat.avatar}
                 botId={chat.id}
                 failure={chat.failure}
                 key={chat.id}
