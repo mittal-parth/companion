@@ -6,7 +6,7 @@
  * callers all use this file. They call the daemon's existing /bots API.
  * /api/health is the app's own health check, and it does not use this file.
  */
-import type { BotTranscript, BotView } from "@companion/shared";
+import type { BotAvatar, BotTranscript, BotView } from "@companion/shared";
 import {
   isImageMime,
   parseTurnEvent,
@@ -26,10 +26,11 @@ export function daemonUrl(): string {
   return url.replace(/\/$/, "");
 }
 
-/** A bot in the sidebar: the name, and nothing about its files. */
+/** A bot in the sidebar: the name, the preset picture, and nothing about its files. */
 export type BotSummary = {
   id: string;
   name: string;
+  avatar: BotAvatar;
 };
 
 /**
@@ -39,6 +40,7 @@ export type BotSummary = {
 export type LoadedBot = {
   id: string;
   name: string;
+  avatar: BotAvatar;
   messages: UIMessage[];
   resume: boolean;
   replyFrom?: number;
@@ -63,7 +65,11 @@ export async function openFirstBot(): Promise<{
 /** Every bot, oldest first. */
 export async function listBots(): Promise<BotSummary[]> {
   const listed = await daemonJson<BotView[]>("/bots");
-  return listed.map((bot) => ({ id: bot.id, name: bot.name }));
+  return listed.map((bot) => ({
+    id: bot.id,
+    name: bot.name,
+    avatar: bot.avatar,
+  }));
 }
 
 /** The conversation the chat should show for one bot. */
@@ -76,6 +82,7 @@ export async function loadBot(id: string): Promise<LoadedBot> {
     return {
       id: bot.id,
       name: bot.name,
+      avatar: bot.avatar,
       messages: transcriptToMessages(bot.updates.slice(0, turn.replyFrom)),
       resume: true,
       replyFrom: turn.replyFrom,
@@ -84,6 +91,7 @@ export async function loadBot(id: string): Promise<LoadedBot> {
   return {
     id: bot.id,
     name: bot.name,
+    avatar: bot.avatar,
     messages: transcriptToMessages(bot.updates),
     resume: false,
     failure: turn.status === "failed" ? turn.error : undefined,

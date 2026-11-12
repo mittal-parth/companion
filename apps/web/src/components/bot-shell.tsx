@@ -2,14 +2,16 @@
 
 /**
  * The sidebar of this computer's bots, and the conversation that is open.
- * A right-click on a row edits or deletes that bot. Edit replaces the row's
- * name with a text field: Enter or leaving the field saves, and Escape keeps
- * the previous name. The chat header only shows the name, beside the theme
- * control. Delete asks first, then removes the bot and its conversation.
- * The next bot opens, or the one above when the deleted bot was last in the
- * list. The last bot leaves a screen that asks for a name. A refresh opens
- * the first bot again, and an empty computer stays on that screen.
+ * A right-click on a row edits the name, changes the preset avatar, or
+ * deletes the bot. Edit replaces the row's name with a text field: Enter or
+ * leaving the field saves, and Escape keeps the previous name. The chat
+ * header shows that same avatar and the name, beside the theme control.
+ * Delete asks first, then removes the bot and its conversation. The next bot
+ * opens, or the one above when the deleted bot was last in the list. The last
+ * bot leaves a screen that asks for a picture and a name. A refresh opens the
+ * first bot again, and an empty computer stays on that screen.
  */
+import { AvatarPicker, BotAvatar } from "@/components/bot-avatar";
 import { Chat } from "@/components/chat";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,6 +44,11 @@ import {
 } from "@/components/ui/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import type { BotSummary, LoadedBot } from "@/lib/daemon";
+import {
+  defaultAvatar,
+  parseAvatar,
+  type BotAvatar as ChosenAvatar,
+} from "@companion/shared/avatar";
 import { PlusIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -57,9 +64,16 @@ export function BotShell({
   const [switching, setSwitching] = useState(false);
   const [shellError, setShellError] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
-  const [createName, setCreateName] = useState("");
+  const [createName, setCreateName] = useState(
+    initialBots.length === 0 ? "New Bot" : "",
+  );
+  const [createAvatar, setCreateAvatar] = useState(defaultAvatar);
   const [createError, setCreateError] = useState<string>();
   const [creating, setCreating] = useState(false);
+  const [avatarEdit, setAvatarEdit] = useState<BotSummary>();
+  const [avatarDraft, setAvatarDraft] = useState(defaultAvatar);
+  const [avatarError, setAvatarError] = useState<string>();
+  const [savingAvatar, setSavingAvatar] = useState(false);
   const [editingId, setEditingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
   const [pendingDelete, setPendingDelete] = useState<BotSummary>();
@@ -84,6 +98,8 @@ export function BotShell({
                 createNameRef.current?.focus();
                 return;
               }
+              setCreateName("");
+              setCreateAvatar(defaultAvatar);
               setCreateOpen(true);
             }}
             size="icon-sm"
@@ -93,13 +109,27 @@ export function BotShell({
             <PlusIcon />
           </Button>
         </SidebarHeader>
-        <SidebarContent>
+        <SidebarContent className="flex flex-col">
           <SidebarGroup>
             <SidebarGroupContent>
               {bots.length === 0 ? (
-                <p className="px-4 py-6 text-center text-sm text-sidebar-foreground/70">
-                  No bots yet
-                </p>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      className="py-1.5"
+                      isActive
+                      onClick={() => createNameRef.current?.focus()}
+                      type="button"
+                    >
+                      <BotAvatar
+                        avatar={createAvatar}
+                        className="[&_svg]:size-5!"
+                        size={20}
+                      />
+                      <span className="truncate">Create your first Bot</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
               ) : (
                 <SidebarMenu>
                   {bots.map((bot) => (
@@ -137,16 +167,31 @@ export function BotShell({
                         <ContextMenu>
                           <ContextMenuTrigger asChild>
                             <SidebarMenuButton
+                              className="py-1.5"
                               isActive={bot.id === chat?.id}
                               onClick={() => void openBot(bot.id)}
                               type="button"
                             >
+                              <BotAvatar
+                                avatar={bot.avatar}
+                                className="[&_svg]:size-5!"
+                                size={20}
+                              />
                               <span className="truncate">{bot.name}</span>
                             </SidebarMenuButton>
                           </ContextMenuTrigger>
                           <ContextMenuContent>
                             <ContextMenuItem onSelect={() => beginEdit(bot)}>
                               Edit
+                            </ContextMenuItem>
+                            <ContextMenuItem
+                              onSelect={() => {
+                                setAvatarError(undefined);
+                                setAvatarDraft(bot.avatar);
+                                setAvatarEdit(bot);
+                              }}
+                            >
+                              Change avatar
                             </ContextMenuItem>
                             <ContextMenuItem
                               onSelect={() => {
@@ -166,15 +211,23 @@ export function BotShell({
               )}
             </SidebarGroupContent>
           </SidebarGroup>
+          {bots.length === 0 ? (
+            <p className="flex flex-1 items-center justify-center px-4 text-sm text-sidebar-foreground/70">
+              No chats yet
+            </p>
+          ) : null}
         </SidebarContent>
       </Sidebar>
       <SidebarInset className="min-h-0 overflow-hidden">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-2">
           <SidebarTrigger />
           {chat !== null ? (
-            <h1 className="min-w-0 flex-1 truncate px-2 text-sm font-medium">
-              {chat.name}
-            </h1>
+            <BotTitle avatar={chat.avatar} name={chat.name} />
+          ) : bots.length === 0 ? (
+            <BotTitle
+              avatar={createAvatar}
+              name={createName.trim() === "" ? "New Bot" : createName.trim()}
+            />
           ) : (
             <div className="flex-1" />
           )}
@@ -199,38 +252,47 @@ export function BotShell({
         ) : bots.length === 0 ? (
           <main className="flex flex-1 items-center justify-center p-8">
             <form
-              className="w-full max-w-sm"
+              className="flex w-full max-w-sm flex-col items-center"
               onSubmit={(event) => {
                 event.preventDefault();
                 void createBot();
               }}
             >
-              <h1 className="text-base font-medium">Create a bot</h1>
-              <p className="pt-2 text-sm text-muted-foreground">
-                Give it a name. It will greet you and ask what it is for.
-              </p>
-              <Input
-                aria-label="Name"
-                autoComplete="off"
-                autoFocus
-                className="mt-4"
+              <AvatarPicker
+                avatar={createAvatar}
                 disabled={creating}
-                onChange={(event) => setCreateName(event.target.value)}
-                placeholder="Name your bot"
-                ref={createNameRef}
-                value={createName}
+                onChange={setCreateAvatar}
               />
+              <div className="mt-6 w-full">
+                <label
+                  className="text-sm text-muted-foreground"
+                  htmlFor="new-bot-name"
+                >
+                  Name
+                </label>
+                <Input
+                  autoComplete="off"
+                  autoFocus
+                  className="mt-2"
+                  disabled={creating}
+                  id="new-bot-name"
+                  onChange={(event) => setCreateName(event.target.value)}
+                  ref={createNameRef}
+                  value={createName}
+                />
+              </div>
               {createError ? (
                 <p className="pt-2 text-destructive text-sm" role="alert">
                   {createError}
                 </p>
               ) : null}
               <Button
-                className="mt-4"
+                className="mt-6"
                 disabled={creating || createName.trim() === ""}
                 type="submit"
+                variant="secondary"
               >
-                {creating ? "Creating" : "Create"}
+                {creating ? "Creating" : "Get started"}
               </Button>
             </form>
           </main>
@@ -254,10 +316,17 @@ export function BotShell({
               void createBot();
             }}
           >
+            <AvatarPicker
+              avatar={createAvatar}
+              disabled={creating}
+              onChange={setCreateAvatar}
+              previewSize={72}
+            />
             <Input
               aria-label="Name"
               autoComplete="off"
               autoFocus
+              className="mt-4"
               disabled={creating}
               onChange={(event) => setCreateName(event.target.value)}
               placeholder="Name your bot"
@@ -332,6 +401,54 @@ export function BotShell({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <Dialog
+        open={avatarEdit !== undefined}
+        onOpenChange={(open) => {
+          if (open || savingAvatar) return;
+          setAvatarEdit(undefined);
+          setAvatarError(undefined);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change avatar</DialogTitle>
+            <DialogDescription>
+              Pick a color and a shape. The conversation stays the same.
+            </DialogDescription>
+          </DialogHeader>
+          <AvatarPicker
+            avatar={avatarDraft}
+            disabled={savingAvatar}
+            onChange={setAvatarDraft}
+            previewSize={72}
+          />
+          {avatarError ? (
+            <p className="text-destructive text-sm" role="alert">
+              {avatarError}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button
+              disabled={savingAvatar}
+              onClick={() => {
+                setAvatarEdit(undefined);
+                setAvatarError(undefined);
+              }}
+              type="button"
+              variant="outline"
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={savingAvatar || avatarEdit === undefined}
+              onClick={() => void saveAvatar()}
+              type="button"
+            >
+              {savingAvatar ? "Saving" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </SidebarProvider>
   );
 
@@ -340,6 +457,7 @@ export function BotShell({
     setCreateOpen(open);
     if (!open) {
       setCreateName("");
+      setCreateAvatar(defaultAvatar);
       setCreateError(undefined);
     }
   }
@@ -382,15 +500,23 @@ export function BotShell({
       const response = await fetch("/api/bots", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({
+          name,
+          shape: createAvatar.shape,
+          color: createAvatar.color,
+        }),
       });
       const body: unknown = await response.json().catch(() => undefined);
       if (!response.ok || !isLoadedBot(body)) {
         throw new Error(messageFrom(body, "The bot could not be created."));
       }
-      setBots((list) => [...list, { id: body.id, name: body.name }]);
+      setBots((list) => [
+        ...list,
+        { id: body.id, name: body.name, avatar: body.avatar },
+      ]);
       setChat(body);
       setCreateName("");
+      setCreateAvatar(defaultAvatar);
       setCreateOpen(false);
     } catch (error) {
       setCreateError(
@@ -469,7 +595,12 @@ export function BotShell({
         renameGeneration.current += 1;
         setEditingId(undefined);
       }
-      setBots((list) => list.filter((bot) => bot.id !== target.id));
+      const remaining = bots.filter((bot) => bot.id !== target.id);
+      setBots(remaining);
+      if (remaining.length === 0) {
+        setCreateName("New Bot");
+        setCreateAvatar(defaultAvatar);
+      }
       setPendingDelete(undefined);
       if (!wasOpen) return;
       if (next !== undefined && next.id !== target.id) {
@@ -490,6 +621,64 @@ export function BotShell({
       setDeleting(false);
     }
   }
+
+  async function saveAvatar() {
+    const target = avatarEdit;
+    if (target === undefined || savingAvatar) return;
+    if (
+      target.avatar.shape === avatarDraft.shape &&
+      target.avatar.color === avatarDraft.color
+    ) {
+      setAvatarEdit(undefined);
+      return;
+    }
+    setSavingAvatar(true);
+    setAvatarError(undefined);
+    try {
+      const response = await fetch(
+        `/api/bots/${encodeURIComponent(target.id)}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            shape: avatarDraft.shape,
+            color: avatarDraft.color,
+          }),
+        },
+      );
+      const body: unknown = await response.json().catch(() => undefined);
+      if (!response.ok || !isAvatarUpdate(body)) {
+        throw new Error(messageFrom(body, "The avatar could not be changed."));
+      }
+      setBots((list) =>
+        list.map((bot) =>
+          bot.id === body.id ? { ...bot, avatar: body.avatar } : bot,
+        ),
+      );
+      setChat((current) =>
+        current?.id === body.id ? { ...current, avatar: body.avatar } : current,
+      );
+      setAvatarEdit(undefined);
+    } catch (error) {
+      setAvatarError(
+        error instanceof Error
+          ? error.message
+          : "The avatar could not be changed.",
+      );
+    } finally {
+      setSavingAvatar(false);
+    }
+  }
+}
+
+/** The picture and name in the chat header. The picture is decorative. */
+function BotTitle({ avatar, name }: { avatar: ChosenAvatar; name: string }) {
+  return (
+    <h1 className="flex min-w-0 flex-1 items-center gap-2 px-2 text-sm font-medium">
+      <BotAvatar avatar={avatar} size={20} />
+      <span className="truncate">{name}</span>
+    </h1>
+  );
 }
 
 function isLoadedBot(value: unknown): value is LoadedBot {
@@ -498,9 +687,28 @@ function isLoadedBot(value: unknown): value is LoadedBot {
   return (
     typeof bot.id === "string" &&
     typeof bot.name === "string" &&
+    isAvatar(bot.avatar) &&
     Array.isArray(bot.messages) &&
     typeof bot.resume === "boolean"
   );
+}
+
+function isAvatar(value: unknown): value is ChosenAvatar {
+  if (typeof value !== "object" || value === null) return false;
+  const avatar = value as Partial<ChosenAvatar>;
+  return (
+    typeof avatar.shape === "string" &&
+    typeof avatar.color === "string" &&
+    parseAvatar(avatar.shape, avatar.color) !== undefined
+  );
+}
+
+function isAvatarUpdate(
+  value: unknown,
+): value is { id: string; avatar: ChosenAvatar } {
+  if (typeof value !== "object" || value === null) return false;
+  const bot = value as { id?: unknown; avatar?: unknown };
+  return typeof bot.id === "string" && isAvatar(bot.avatar);
 }
 
 function isSummary(value: unknown): value is BotSummary {

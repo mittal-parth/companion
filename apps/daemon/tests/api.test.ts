@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
+  defaultAvatar,
   parseTurnEvents,
   type AttachedImage,
   type BotTranscript,
@@ -497,6 +498,63 @@ test("a bot can be renamed without touching its conversation", async () => {
         method: "PUT",
       });
       expect(wrong.status).toBe(405);
+    },
+  );
+});
+
+test("a bot keeps the preset avatar it was given", async () => {
+  await withDaemon(
+    scripted([
+      { updates: [hello], stopReason: "end_turn" },
+      { updates: [hello], stopReason: "end_turn" },
+    ]),
+    async (daemon) => {
+      const created = await postJson(daemon, "/bots", {
+        name: "Ada",
+        shape: "cloud",
+        color: "#EC4899",
+      });
+      expect(created.status).toBe(201);
+      const bot = (await created.json()) as BotView;
+      expect(bot.avatar).toEqual({ shape: "cloud", color: "#ec4899" });
+      const plain = await createBot(daemon, "Bea");
+      expect(plain.avatar).toEqual(defaultAvatar);
+
+      const changed = await fetch(`${daemon.url}/bots/${bot.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ shape: "drop", color: "#1fbf68" }),
+      });
+      expect(changed.status).toBe(200);
+      expect(await changed.json()).toMatchObject({
+        id: bot.id,
+        name: "Ada",
+        avatar: { shape: "drop", color: "#1fbf68" },
+      });
+      const stored = (await (
+        await fetch(`${daemon.url}/bots/${bot.id}`)
+      ).json()) as BotTranscript;
+      expect(stored.avatar).toEqual({ shape: "drop", color: "#1fbf68" });
+      expect(stored.updates).toEqual([hello]);
+
+      const half = await fetch(`${daemon.url}/bots/${bot.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ shape: "circle" }),
+      });
+      expect(half.status).toBe(400);
+      const unknown = await postJson(daemon, "/bots", {
+        name: "Cleo",
+        shape: "star",
+        color: "#1f7cf2",
+      });
+      expect(unknown.status).toBe(400);
+      const empty = await fetch(`${daemon.url}/bots/${bot.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(empty.status).toBe(400);
     },
   );
 });

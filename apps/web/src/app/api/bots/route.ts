@@ -3,6 +3,7 @@
  * The reply is that bot's conversation, so the page can show the greeting.
  */
 import { daemonError, daemonFetch, loadBot } from "@/lib/daemon";
+import { parseAvatar } from "@companion/shared/avatar";
 import type { BotView } from "@companion/shared";
 import { connection } from "next/server";
 
@@ -21,11 +22,15 @@ export async function POST(request: Request) {
   if (name === undefined) {
     return Response.json({ error: "A bot needs a name." }, { status: 400 });
   }
+  const avatar = avatarFields(body);
+  if (!avatar.ok) {
+    return Response.json({ error: avatar.error }, { status: 400 });
+  }
   try {
     const daemon = await daemonFetch("/bots", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, ...avatar.fields }),
     });
     if (!daemon.ok) {
       return Response.json(
@@ -46,6 +51,34 @@ export async function POST(request: Request) {
       { status: 502 },
     );
   }
+}
+
+/**
+ * The preset the page picked, when it sent one.
+ * Omitting both leaves the daemon's default. Sending a shape that is not
+ * in the list, or only one of the two, is refused here.
+ */
+function avatarFields(
+  body: unknown,
+):
+  | { ok: true; fields: { shape?: string; color?: string } }
+  | { ok: false; error: string } {
+  if (typeof body !== "object" || body === null) {
+    return { ok: true, fields: {} };
+  }
+  const record = body as Record<string, unknown>;
+  const shape = textField(record, "shape");
+  const color = textField(record, "color");
+  if (shape === undefined && color === undefined)
+    return { ok: true, fields: {} };
+  if (
+    shape === undefined ||
+    color === undefined ||
+    parseAvatar(shape, color) === undefined
+  ) {
+    return { ok: false, error: "An avatar needs a preset shape and color." };
+  }
+  return { ok: true, fields: { shape, color } };
 }
 
 function textField(body: unknown, key: string): string | undefined {

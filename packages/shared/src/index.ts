@@ -4,6 +4,7 @@
  * Session update fields match what OpenCode sent, stored in the hello fixture.
  */
 import type * as acp from "@agentclientprotocol/sdk";
+import type { BotAvatar } from "./avatar.js";
 import type { Schedule } from "./schedule.js";
 
 export const sharedPackage = "@companion/shared" as const;
@@ -31,6 +32,8 @@ export type Bot = {
   id: string;
   name: string;
   engine: EngineName;
+  /** The preset picture shown for this bot. */
+  avatar: BotAvatar;
 };
 
 /**
@@ -225,6 +228,15 @@ export type ScheduleCommand =
   | { command: "delete"; id: string }
   | { command: "help" };
 
+export {
+  avatarColors,
+  avatarShapes,
+  defaultAvatar,
+  parseAvatar,
+  type AvatarColor,
+  type AvatarShape,
+  type BotAvatar,
+} from "./avatar.js";
 export {
   imageMimeTypes,
   isImageMime,
