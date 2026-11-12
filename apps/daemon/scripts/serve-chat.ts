@@ -51,7 +51,13 @@ const next = spawn(
   [nextBin, "start", "-H", "127.0.0.1", "-p", port],
   {
     cwd: join(here, "../../web"),
-    env: { ...process.env, COMPANION_DAEMON_URL: daemon.url },
+    env: {
+      ...process.env,
+      COMPANION_DAEMON_URL: daemon.url,
+      // Opens the app only when this build has no Supabase keys, so CI can
+      // still reach the daemon. A build with the keys ignores it.
+      COMPANION_E2E_SESSION: "1",
+    },
     stdio: "inherit",
   },
 );

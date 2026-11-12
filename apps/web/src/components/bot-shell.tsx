@@ -14,8 +14,10 @@
  * address is /bots/<id>, using the id the daemon already stored. Choosing,
  * creating, or deleting the open bot updates that address. A refresh of it
  * opens the same bot. A refresh of / opens the first bot, and an empty
- * computer stays on that screen.
+ * computer stays on that screen. The signed-in account sits at the bottom
+ * left. Its menu opens upward and signs out.
  */
+import { AccountMenu } from "@/components/account-menu";
 import { AvatarPicker, BotAvatar } from "@/components/bot-avatar";
 import { Chat } from "@/components/chat";
 import { SchedulesPanel } from "@/components/schedules-panel";
@@ -38,6 +40,7 @@ import { Input } from "@/components/ui/input";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarHeader,
@@ -60,9 +63,11 @@ import { PlusIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export function BotShell({
+  avatarUrl,
   bots: initialBots,
   chat: initialChat,
 }: {
+  avatarUrl: string | null;
   bots: BotSummary[];
   chat: LoadedBot | null;
 }) {
@@ -241,6 +246,9 @@ export function BotShell({
             </p>
           ) : null}
         </SidebarContent>
+        <SidebarFooter className="items-start">
+          <AccountMenu avatarUrl={avatarUrl} />
+        </SidebarFooter>
       </Sidebar>
       <SidebarInset className="min-h-0 overflow-hidden">
         <div className="flex min-h-0 min-w-0 flex-1">

@@ -3,12 +3,15 @@
  * The browser reads them here. It cannot create one.
  */
 import { listScheduleViews, ScheduleRequestError } from "@/lib/schedules";
+import { refuseUnsigned } from "@/lib/supabase/server";
 import { connection } from "next/server";
 
 export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  const denied = await refuseUnsigned();
+  if (denied) return denied;
   await connection();
   const { id } = await context.params;
   try {

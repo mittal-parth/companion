@@ -4,6 +4,7 @@
  * and leaves the conversation. DELETE removes the bot and its conversation.
  */
 import { daemonError, daemonFetch, loadBot } from "@/lib/daemon";
+import { refuseUnsigned } from "@/lib/supabase/server";
 import { parseAvatar } from "@companion/shared/avatar";
 import type { BotView } from "@companion/shared";
 import { connection } from "next/server";
@@ -12,6 +13,8 @@ export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  const denied = await refuseUnsigned();
+  if (denied) return denied;
   await connection();
   const { id } = await context.params;
   try {
@@ -25,6 +28,8 @@ export async function PATCH(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  const denied = await refuseUnsigned();
+  if (denied) return denied;
   await connection();
   const { id } = await context.params;
   let body: unknown;
@@ -67,6 +72,8 @@ export async function DELETE(
   _request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  const denied = await refuseUnsigned();
+  if (denied) return denied;
   await connection();
   const { id } = await context.params;
   try {
