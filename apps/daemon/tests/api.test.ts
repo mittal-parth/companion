@@ -523,18 +523,18 @@ test("a bot keeps the preset avatar it was given", async () => {
       const changed = await fetch(`${daemon.url}/bots/${bot.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ shape: "drop", color: "#1fbf68" }),
+        body: JSON.stringify({ shape: "sprout", color: "#1fbf68" }),
       });
       expect(changed.status).toBe(200);
       expect(await changed.json()).toMatchObject({
         id: bot.id,
         name: "Ada",
-        avatar: { shape: "drop", color: "#1fbf68" },
+        avatar: { shape: "sprout", color: "#1fbf68" },
       });
       const stored = (await (
         await fetch(`${daemon.url}/bots/${bot.id}`)
       ).json()) as BotTranscript;
-      expect(stored.avatar).toEqual({ shape: "drop", color: "#1fbf68" });
+      expect(stored.avatar).toEqual({ shape: "sprout", color: "#1fbf68" });
       expect(stored.updates).toEqual([hello]);
 
       const half = await fetch(`${daemon.url}/bots/${bot.id}`, {
@@ -545,7 +545,7 @@ test("a bot keeps the preset avatar it was given", async () => {
       expect(half.status).toBe(400);
       const unknown = await postJson(daemon, "/bots", {
         name: "Cleo",
-        shape: "star",
+        shape: "pebble",
         color: "#1f7cf2",
       });
       expect(unknown.status).toBe(400);

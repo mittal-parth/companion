@@ -1,6 +1,6 @@
 # Phase 3.3
 
-Each bot wears a preset picture: one color and one shape from the open-bot-avatar list. White is not offered. Generate and upload are not part of this. The conversation bubbles are unchanged, and there is still no search and no last-line preview.
+Each bot wears a preset picture: one color and one open-bot-avatar object. The shapes are that library's starters and its gallery, mounted live so they have volume, blink, and look toward the pointer. White is not offered. Generate and upload are not part of this. The conversation bubbles are unchanged, and there is still no search and no last-line preview.
 
 With no bots, the page is the create screen. A color row, then a shape row, then the name. The sidebar row shows the picture being chosen and says "Create your first Bot". The header shows that picture and the name. Get started waits until the opening turn is stored, then shows the greeting. Creating another bot uses the same rows in the dialog.
 
@@ -13,7 +13,7 @@ pnpm test
 pnpm e2e
 ```
 
-`POST /bots` accepts `{ "name", "shape", "color" }`. Omitting the picture uses the blue circle. A shape or color outside the list is a 400.
+`POST /bots` accepts `{ "name", "shape", "color" }`. Omitting the picture uses the blue controller. A shape or color outside the list is a 400.
 
 `PATCH /bots/:id` with `{ "shape", "color" }` changes the stored picture and returns the bot. The name, the conversation, its folder, and a turn that is already running are left as they are. `{ "name" }` still renames, and the picture stays. An unknown bot is a 404.
 

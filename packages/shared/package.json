@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.4.0",
-    "croner": "^11.0.0"
+    "croner": "^11.0.0",
+    "open-bot-avatar": "0.2.1"
   }
 }

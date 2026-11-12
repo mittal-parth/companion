@@ -312,12 +312,12 @@ test("a bot keeps the avatar it was given", () => {
       defaultAvatar,
     );
     const changed = store.setBotAvatar(bot.id, {
-      shape: "drop",
+      shape: "sprout",
       color: "#1FBF68",
     } as unknown as BotAvatar);
     expect(changed).toEqual({
       ...bot,
-      avatar: { shape: "drop", color: "#1fbf68" },
+      avatar: { shape: "sprout", color: "#1fbf68" },
     });
     expect(store.renameBot(bot.id, "Nightly").avatar).toEqual(changed.avatar);
     store.close();
@@ -325,7 +325,7 @@ test("a bot keeps the avatar it was given", () => {
     expect(restored.getBot(bot.id).avatar).toEqual(changed.avatar);
     expect(() =>
       restored.setBotAvatar(bot.id, {
-        shape: "star",
+        shape: "pebble",
         color: "#1f7cf2",
       } as unknown as BotAvatar),
     ).toThrow("An avatar needs a preset shape and color.");

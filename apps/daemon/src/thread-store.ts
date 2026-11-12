@@ -206,7 +206,7 @@ function migrate(db: DatabaseSync): void {
 }
 
 /**
- * Gives a bot stored before avatars the blue circle.
+ * Gives a bot stored before avatars the default picture.
  * A new file already has the columns. Adding them again would fail.
  */
 function addAvatarColumns(db: DatabaseSync): void {

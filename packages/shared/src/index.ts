@@ -230,6 +230,7 @@ export type ScheduleCommand =
 
 export {
   avatarColors,
+  avatarDefinitions,
   avatarShapes,
   defaultAvatar,
   parseAvatar,

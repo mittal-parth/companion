@@ -246,14 +246,14 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
 
   await page.getByRole("button", { name: "New bot" }).click();
   await page.getByRole("radio", { name: "Orange" }).click();
-  await page.getByRole("radio", { name: "Triangle" }).click();
+  await page.getByRole("radio", { name: "Lightbulb" }).click();
   await page.getByRole("textbox", { name: "Name" }).fill("Bea");
   await page.getByRole("button", { name: "Create" }).click();
   await expect(page.getByRole("heading", { name: "Bea" })).toBeVisible();
   await expect(
     page
       .getByRole("heading", { name: "Bea" })
-      .locator("[data-shape='triangle']"),
+      .locator("[data-shape='lightbulb']"),
   ).toHaveAttribute("data-color", "#ff6a1a");
   await page.getByRole("button", { name: "Companion", exact: true }).click();
   await page.getByRole("button", { name: "Bea", exact: true }).click({
@@ -348,26 +348,30 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
     page.getByRole("heading", { name: "Change avatar" }),
   ).toBeVisible();
   await page.getByRole("radio", { name: "Green" }).click();
-  await page.getByRole("radio", { name: "Drop" }).click();
+  await page.getByRole("radio", { name: "Sprout" }).click();
   await page.getByRole("button", { name: "Save" }).click();
   await expect(
-    page.getByRole("heading", { name: "Echo" }).locator("[data-shape='drop']"),
+    page
+      .getByRole("heading", { name: "Echo" })
+      .locator("[data-shape='sprout']"),
   ).toHaveAttribute("data-color", "#1fbf68");
   await expect(
     page
       .getByRole("button", { name: "Echo", exact: true })
-      .locator("[data-shape='drop']"),
+      .locator("[data-shape='sprout']"),
   ).toHaveAttribute("data-color", "#1fbf68");
   await expect(page.getByText("What should I help with?")).toBeVisible();
 
   await page.reload();
   await expect(
-    page.getByRole("heading", { name: "Echo" }).locator("[data-shape='drop']"),
+    page
+      .getByRole("heading", { name: "Echo" })
+      .locator("[data-shape='sprout']"),
   ).toHaveAttribute("data-color", "#1fbf68");
   await expect(
     page
       .getByRole("button", { name: "Echo", exact: true })
-      .locator("[data-shape='drop']"),
+      .locator("[data-shape='sprout']"),
   ).toHaveAttribute("data-color", "#1fbf68");
   await expect(page.getByText("What should I help with?")).toBeVisible();
 });

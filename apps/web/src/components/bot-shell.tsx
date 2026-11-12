@@ -116,22 +116,18 @@ export function BotShell({
                 <SidebarMenu>
                   <SidebarMenuItem>
                     <SidebarMenuButton
-                      className="py-1.5"
+                      className="h-auto min-h-16 gap-3 overflow-visible px-3 py-3 text-base font-medium"
                       isActive
                       onClick={() => createNameRef.current?.focus()}
                       type="button"
                     >
-                      <BotAvatar
-                        avatar={createAvatar}
-                        className="[&_svg]:size-5!"
-                        size={20}
-                      />
+                      <BotAvatar avatar={createAvatar} size={40} />
                       <span className="truncate">Create your first Bot</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 </SidebarMenu>
               ) : (
-                <SidebarMenu>
+                <SidebarMenu className="gap-1.5">
                   {bots.map((bot) => (
                     <SidebarMenuItem key={bot.id}>
                       {editingId === bot.id ? (
@@ -145,7 +141,7 @@ export function BotShell({
                             aria-label="Bot name"
                             autoComplete="off"
                             autoFocus
-                            className="h-8 w-full min-w-0 rounded-md border border-sidebar-border bg-background px-2 text-sm text-sidebar-foreground outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                            className="h-16 w-full min-w-0 rounded-md border border-sidebar-border bg-background px-3 text-base text-sidebar-foreground outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
                             onBlur={() =>
                               void saveRename(renameSession, bot.id)
                             }
@@ -167,16 +163,12 @@ export function BotShell({
                         <ContextMenu>
                           <ContextMenuTrigger asChild>
                             <SidebarMenuButton
-                              className="py-1.5"
+                              className="h-auto min-h-16 gap-3 overflow-visible px-3 py-3 text-base font-medium"
                               isActive={bot.id === chat?.id}
                               onClick={() => void openBot(bot.id)}
                               type="button"
                             >
-                              <BotAvatar
-                                avatar={bot.avatar}
-                                className="[&_svg]:size-5!"
-                                size={20}
-                              />
+                              <BotAvatar avatar={bot.avatar} size={40} />
                               <span className="truncate">{bot.name}</span>
                             </SidebarMenuButton>
                           </ContextMenuTrigger>
@@ -252,7 +244,7 @@ export function BotShell({
         ) : bots.length === 0 ? (
           <main className="flex flex-1 items-center justify-center p-8">
             <form
-              className="flex w-full max-w-sm flex-col items-center"
+              className="flex w-full max-w-xl flex-col items-center"
               onSubmit={(event) => {
                 event.preventDefault();
                 void createBot();
@@ -303,7 +295,7 @@ export function BotShell({
         )}
       </SidebarInset>
       <Dialog open={createOpen} onOpenChange={closeCreate}>
-        <DialogContent>
+        <DialogContent className="p-6 sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Create new bot</DialogTitle>
             <DialogDescription>
@@ -320,7 +312,7 @@ export function BotShell({
               avatar={createAvatar}
               disabled={creating}
               onChange={setCreateAvatar}
-              previewSize={72}
+              previewSize={112}
             />
             <Input
               aria-label="Name"
@@ -409,7 +401,7 @@ export function BotShell({
           setAvatarError(undefined);
         }}
       >
-        <DialogContent>
+        <DialogContent className="p-6 sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Change avatar</DialogTitle>
             <DialogDescription>
@@ -420,7 +412,7 @@ export function BotShell({
             avatar={avatarDraft}
             disabled={savingAvatar}
             onChange={setAvatarDraft}
-            previewSize={72}
+            previewSize={112}
           />
           {avatarError ? (
             <p className="text-destructive text-sm" role="alert">
@@ -674,8 +666,8 @@ export function BotShell({
 /** The picture and name in the chat header. The picture is decorative. */
 function BotTitle({ avatar, name }: { avatar: ChosenAvatar; name: string }) {
   return (
-    <h1 className="flex min-w-0 flex-1 items-center gap-2 px-2 text-sm font-medium">
-      <BotAvatar avatar={avatar} size={20} />
+    <h1 className="flex min-w-0 flex-1 items-center gap-2.5 px-2 text-base font-medium">
+      <BotAvatar avatar={avatar} size={28} />
       <span className="truncate">{name}</span>
     </h1>
   );
