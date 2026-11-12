@@ -5,8 +5,9 @@
  * Under each name is the latest line of that chat. A right-click on a row
  * edits the name, changes the preset avatar, or deletes the bot. Edit
  * replaces the row's name with a text field. Enter or leaving the field
- * saves, and Escape keeps the previous name. The chat
- * header shows that same avatar and the name, beside the theme control.
+ * saves, and Escape keeps the previous name. The chat header centers that
+ * same avatar and the name. Choosing it opens this bot's schedules on the
+ * right.
  * Delete asks first, then removes the bot and its conversation. The next bot
  * opens, or the one above when the deleted bot was last in the list. The last
  * bot leaves a screen that asks for a picture and a name. A refresh opens the
@@ -14,6 +15,7 @@
  */
 import { AvatarPicker, BotAvatar } from "@/components/bot-avatar";
 import { Chat } from "@/components/chat";
+import { SchedulesPanel } from "@/components/schedules-panel";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -81,6 +83,7 @@ export function BotShell({
   const [pendingDelete, setPendingDelete] = useState<BotSummary>();
   const [deleteError, setDeleteError] = useState<string>();
   const [deleting, setDeleting] = useState(false);
+  const [schedulesOpen, setSchedulesOpen] = useState(false);
   const createNameRef = useRef<HTMLInputElement>(null);
   const renameLock = useRef(false);
   const rememberPreview = useCallback((botId: string, preview: string) => {
@@ -223,89 +226,111 @@ export function BotShell({
         </SidebarContent>
       </Sidebar>
       <SidebarInset className="min-h-0 overflow-hidden">
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-2">
-          <SidebarTrigger />
-          {chat !== null ? (
-            <BotTitle avatar={chat.avatar} name={chat.name} />
-          ) : bots.length === 0 ? (
-            <BotTitle
-              avatar={createAvatar}
-              name={createName.trim() === "" ? "New Bot" : createName.trim()}
-            />
-          ) : (
-            <div className="flex-1" />
-          )}
-          <ThemeToggle className="shrink-0" />
-        </header>
-        {shellError ? (
-          <p className="px-4 pt-2 text-destructive text-sm" role="alert">
-            {shellError}
-          </p>
-        ) : null}
-        {chat !== null ? (
-          <Chat
-            botId={chat.id}
-            failure={chat.failure}
-            key={chat.id}
-            locked={switching}
-            messages={chat.messages}
-            name={chat.name}
-            onPreview={rememberPreview}
-            replyFrom={chat.replyFrom}
-            resume={chat.resume}
-          />
-        ) : bots.length === 0 ? (
-          <main className="flex flex-1 items-center justify-center p-8">
-            <form
-              className="flex w-full max-w-xl flex-col items-center"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void createBot();
-              }}
-            >
-              <AvatarPicker
-                avatar={createAvatar}
-                disabled={creating}
-                onChange={setCreateAvatar}
-              />
-              <div className="mt-6 w-full">
-                <label
-                  className="text-sm text-muted-foreground"
-                  htmlFor="new-bot-name"
-                >
-                  Name
-                </label>
-                <Input
-                  autoComplete="off"
-                  autoFocus
-                  className="mt-2"
-                  disabled={creating}
-                  id="new-bot-name"
-                  onChange={(event) => setCreateName(event.target.value)}
-                  ref={createNameRef}
-                  value={createName}
-                />
+        <div className="flex min-h-0 min-w-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <header className="relative flex h-14 shrink-0 items-center border-b px-2">
+              <SidebarTrigger />
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="pointer-events-auto max-w-[calc(100%-6rem)]">
+                  {chat !== null ? (
+                    <BotTitle
+                      avatar={chat.avatar}
+                      name={chat.name}
+                      onOpenSchedules={() => setSchedulesOpen((open) => !open)}
+                      schedulesOpen={schedulesOpen}
+                    />
+                  ) : bots.length === 0 ? (
+                    <BotTitle
+                      avatar={createAvatar}
+                      name={
+                        createName.trim() === "" ? "New Bot" : createName.trim()
+                      }
+                    />
+                  ) : null}
+                </div>
               </div>
-              {createError ? (
-                <p className="pt-2 text-destructive text-sm" role="alert">
-                  {createError}
-                </p>
-              ) : null}
-              <Button
-                className="mt-6"
-                disabled={creating || createName.trim() === ""}
-                type="submit"
-                variant="secondary"
-              >
-                {creating ? "Creating" : "Get started"}
-              </Button>
-            </form>
-          </main>
-        ) : (
-          <main className="flex flex-1 items-center justify-center p-8">
-            <p className="text-muted-foreground">Choose a bot.</p>
-          </main>
-        )}
+              <ThemeToggle className="ml-auto shrink-0" />
+            </header>
+            {shellError ? (
+              <p className="px-4 pt-2 text-destructive text-sm" role="alert">
+                {shellError}
+              </p>
+            ) : null}
+            {chat !== null ? (
+              <Chat
+                botId={chat.id}
+                failure={chat.failure}
+                key={chat.id}
+                locked={switching}
+                messages={chat.messages}
+                name={chat.name}
+                onPreview={rememberPreview}
+                replyFrom={chat.replyFrom}
+                resume={chat.resume}
+              />
+            ) : bots.length === 0 ? (
+              <main className="flex flex-1 items-center justify-center p-8">
+                <form
+                  className="flex w-full max-w-xl flex-col items-center"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void createBot();
+                  }}
+                >
+                  <AvatarPicker
+                    avatar={createAvatar}
+                    disabled={creating}
+                    onChange={setCreateAvatar}
+                  />
+                  <div className="mt-6 w-full">
+                    <label
+                      className="text-sm text-muted-foreground"
+                      htmlFor="new-bot-name"
+                    >
+                      Name
+                    </label>
+                    <Input
+                      autoComplete="off"
+                      autoFocus
+                      className="mt-2"
+                      disabled={creating}
+                      id="new-bot-name"
+                      onChange={(event) => setCreateName(event.target.value)}
+                      ref={createNameRef}
+                      value={createName}
+                    />
+                  </div>
+                  {createError ? (
+                    <p className="pt-2 text-destructive text-sm" role="alert">
+                      {createError}
+                    </p>
+                  ) : null}
+                  <Button
+                    className="mt-6"
+                    disabled={creating || createName.trim() === ""}
+                    type="submit"
+                    variant="secondary"
+                  >
+                    {creating ? "Creating" : "Get started"}
+                  </Button>
+                </form>
+              </main>
+            ) : (
+              <main className="flex flex-1 items-center justify-center p-8">
+                <p className="text-muted-foreground">Choose a bot.</p>
+              </main>
+            )}
+          </div>
+          {chat !== null && schedulesOpen ? (
+            <SchedulesPanel
+              avatar={chat.avatar}
+              botId={chat.id}
+              key={chat.id}
+              name={chat.name}
+              onClose={() => setSchedulesOpen(false)}
+            />
+          ) : null}
+        </div>
       </SidebarInset>
       <Dialog open={createOpen} onOpenChange={closeCreate}>
         <DialogContent className="p-6 sm:max-w-xl">
@@ -623,10 +648,12 @@ export function BotShell({
       if (next !== undefined && next.id !== target.id) {
         const opened = await openBot(next.id);
         if (!opened) {
+          setSchedulesOpen(false);
           setChat((current) => (current?.id === target.id ? null : current));
         }
         return;
       }
+      setSchedulesOpen(false);
       setChat((current) => (current?.id === target.id ? null : current));
     } catch (error) {
       setDeleteError(
@@ -706,13 +733,48 @@ function BotRowText({ name, preview }: { name: string; preview: string }) {
   );
 }
 
-/** The picture and name in the chat header. The picture is decorative. */
-function BotTitle({ avatar, name }: { avatar: ChosenAvatar; name: string }) {
-  return (
-    <h1 className="flex min-w-0 flex-1 items-center gap-2.5 px-2 text-base font-medium">
-      <BotAvatar avatar={avatar} size={28} />
+/**
+ * The picture and name centered on the chat.
+ * For the open bot, choosing it opens the schedules column. The picture is
+ * the live preset avatar.
+ */
+function BotTitle({
+  avatar,
+  name,
+  schedulesOpen = false,
+  onOpenSchedules,
+}: {
+  avatar: ChosenAvatar;
+  name: string;
+  schedulesOpen?: boolean;
+  onOpenSchedules?: () => void;
+}) {
+  const title = (
+    <>
+      <BotAvatar avatar={avatar} size={32} />
       <span className="truncate">{name}</span>
-    </h1>
+    </>
+  );
+  if (onOpenSchedules === undefined) {
+    return (
+      <h1 className="flex min-w-0 items-center gap-2.5 px-2 text-base font-medium">
+        {title}
+      </h1>
+    );
+  }
+  return (
+    <div className="relative rounded-full hover:bg-muted">
+      <h1 className="flex min-w-0 items-center gap-2.5 px-3 py-1 text-base font-medium">
+        {title}
+      </h1>
+      <button
+        aria-expanded={schedulesOpen}
+        aria-label={`Schedules for ${name}`}
+        className="absolute inset-0 rounded-full"
+        onClick={onOpenSchedules}
+        type="button"
+      />
+    </div>
   );
 }
 

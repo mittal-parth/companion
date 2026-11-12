@@ -134,6 +134,25 @@ export function nextRuns(
   return runs;
 }
 
+/**
+ * A short phrase for when a schedule runs.
+ * The schedules panel shows this under the prompt. It is not a cron field.
+ */
+export function describeSchedule(schedule: Schedule): string {
+  switch (schedule.kind) {
+    case "cron":
+      return describeCron(schedule.expression);
+    case "interval":
+      return describeInterval(schedule);
+    case "once":
+      return "Once";
+    default: {
+      const unexpected: never = schedule;
+      return unexpected;
+    }
+  }
+}
+
 function validateCron(
   text: ScheduleText,
   input: Record<string, unknown>,
@@ -468,4 +487,173 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function invalid(reason: string): ScheduleValidation {
   return { ok: false, reason };
+}
+
+const weekdayNames = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+] as const;
+
+const weekdayAlias: Record<string, number> = {
+  sun: 0,
+  mon: 1,
+  tue: 2,
+  wed: 3,
+  thu: 4,
+  fri: 5,
+  sat: 6,
+};
+
+function describeCron(expression: string): string {
+  const [minute, hour, day, month, weekday] = expression.split(" ");
+  if (
+    minute === undefined ||
+    hour === undefined ||
+    day === undefined ||
+    month === undefined ||
+    weekday === undefined ||
+    expression.split(" ").length !== 5
+  ) {
+    return "On a custom schedule";
+  }
+  if (day === "*" && month === "*" && weekday === "*") {
+    const stepped = steppedPhrase(minute, hour);
+    if (stepped !== null) return stepped;
+  }
+  if (day === "*" && month === "*") {
+    const clock = clockPhrase(minute, hour);
+    const days = weekdayPhrase(weekday);
+    if (clock !== null && days !== null) {
+      if (days === "every day") return `Every day at ${clock}`;
+      if (days === "weekdays") return `Weekdays at ${clock}`;
+      if (days === "weekends") return `Weekends at ${clock}`;
+      return `${days} at ${clock}`;
+    }
+  }
+  return "On a custom schedule";
+}
+
+function describeInterval(schedule: IntervalSchedule): string {
+  const extras: string[] = [];
+  if (schedule.weekdays !== undefined) {
+    const days = weekdayList(schedule.weekdays);
+    if (days === "weekdays") extras.push("on weekdays");
+    else if (days === "weekends") extras.push("on weekends");
+    else if (days !== null && days !== "every day") extras.push(`on ${days}`);
+  }
+  if (schedule.window !== undefined) {
+    extras.push(
+      `from ${clockFromHHMM(schedule.window.start)} to ${clockFromHHMM(schedule.window.end)}`,
+    );
+  }
+  const every = everyPhrase(schedule.everyMinutes);
+  return extras.length === 0 ? every : `${every}, ${extras.join(", ")}`;
+}
+
+function everyPhrase(minutes: number): string {
+  if (minutes === 1) return "Every minute";
+  if (minutes < 60) return `Every ${minutes} minutes`;
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return hours === 1 ? "Every hour" : `Every ${hours} hours`;
+  }
+  return `Every ${minutes} minutes`;
+}
+
+function steppedPhrase(minute: string, hour: string): string | null {
+  const minuteStep = stepOf(minute);
+  if (minuteStep !== null && hour === "*") {
+    return minuteStep === 1 ? "Every minute" : `Every ${minuteStep} minutes`;
+  }
+  const hourStep = stepOf(hour);
+  if (minute === "0" && hourStep !== null) {
+    return hourStep === 1 ? "Every hour" : `Every ${hourStep} hours`;
+  }
+  return null;
+}
+
+function stepOf(field: string): number | null {
+  const match = /^\*\/(\d+)$/.exec(field);
+  if (match === null) return null;
+  const value = Number(match[1]);
+  if (!Number.isInteger(value) || value < 1) return null;
+  return value;
+}
+
+function clockPhrase(minute: string, hour: string): string | null {
+  if (!/^\d{1,2}$/.test(minute) || !/^\d{1,2}$/.test(hour)) return null;
+  const minutes = Number(minute);
+  const hours = Number(hour);
+  if (minutes > 59 || hours > 23) return null;
+  return formatClock(hours, minutes);
+}
+
+function clockFromHHMM(value: string): string {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
+  if (match === null) return value;
+  return formatClock(Number(match[1]), Number(match[2]));
+}
+
+function formatClock(hours: number, minutes: number): string {
+  const period = hours < 12 ? "AM" : "PM";
+  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
+  return `${hour12}:${minutes.toString().padStart(2, "0")} ${period}`;
+}
+
+/** Days named the way the panel reads them, or null when the field is not a list of days. */
+function weekdayPhrase(field: string): string | null {
+  const days = parseWeekdayField(field);
+  return days === null ? null : weekdayList(days);
+}
+
+function weekdayList(days: number[]): string | null {
+  const unique = [...new Set(days)].sort((left, right) => left - right);
+  if (unique.some((day) => weekdayNames[day] === undefined)) return null;
+  if (unique.length === 7) return "every day";
+  if (unique.length === 5 && unique.every((day, index) => day === index + 1)) {
+    return "weekdays";
+  }
+  if (unique.length === 2 && unique[0] === 0 && unique[1] === 6) {
+    return "weekends";
+  }
+  const labels = unique.map((day) => `${weekdayNames[day]}s`);
+  if (labels.length === 1) return labels[0] ?? null;
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(", ")}, and ${labels.at(-1)}`;
+}
+
+function parseWeekdayField(field: string): number[] | null {
+  if (field === "*") return [0, 1, 2, 3, 4, 5, 6];
+  if (field.includes("/")) return null;
+  const days: number[] = [];
+  for (const part of field.split(",")) {
+    const range = part.split("-");
+    if (range.length === 1) {
+      const day = weekdayNumber(range[0] ?? "");
+      if (day === null) return null;
+      days.push(day);
+      continue;
+    }
+    if (range.length !== 2) return null;
+    const start = weekdayNumber(range[0] ?? "");
+    const end = weekdayNumber(range[1] ?? "");
+    if (start === null || end === null || start > end) return null;
+    for (let day = start; day <= end; day += 1) days.push(day);
+  }
+  return days.length === 0 ? null : days;
+}
+
+function weekdayNumber(token: string): number | null {
+  const named = weekdayAlias[token.toLowerCase()];
+  if (named !== undefined) return named;
+  if (!/^\d+$/.test(token)) return null;
+  const day = Number(token);
+  if (day === 7) return 0;
+  if (day < 0 || day > 6) return null;
+  return day;
 }

@@ -250,6 +250,7 @@ export {
   type TurnEvent,
 } from "./protocol.js";
 export {
+  describeSchedule,
   nextRun,
   nextRuns,
   validateSchedule,

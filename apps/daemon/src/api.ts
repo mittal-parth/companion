@@ -395,6 +395,10 @@ async function handle(
     followTurn(res, handler, botId, url.searchParams.get("from"));
     return;
   }
+  if (parts[2] === "schedules") {
+    await handleBotSchedules(req, res, handler, botId, parts.slice(3));
+    return;
+  }
   sendJson(res, 404, { error: "Unknown route." });
 }
 
@@ -723,6 +727,49 @@ function decodeId(raw: string | undefined): string {
   } catch {
     return raw ?? "";
   }
+}
+
+/**
+ * The schedules one bot shows in the page.
+ * The list can be paused or resumed. Creating and deleting stay on the
+ * agent route, which the bot reaches with its own token.
+ */
+async function handleBotSchedules(
+  req: IncomingMessage,
+  res: ServerResponse,
+  handler: Handler,
+  botId: string,
+  rest: string[],
+): Promise<void> {
+  handler.store.getBot(botId);
+  const scheduler = handler.scheduler();
+  if (rest.length === 0) {
+    if (req.method !== "GET") {
+      sendJson(res, 405, { error: "Use GET." });
+      return;
+    }
+    sendJson(
+      res,
+      200,
+      scheduler.list(botId).map((schedule) => listing(handler, schedule)),
+    );
+    return;
+  }
+
+  const id = decodeId(rest[0]);
+  const schedule = ownedSchedule(handler, botId, id);
+  const action = rest[1];
+  if (rest.length === 2 && (action === "pause" || action === "resume")) {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { error: "Use POST." });
+      return;
+    }
+    if (action === "pause") scheduler.pause(schedule.id);
+    else scheduler.resume(schedule.id);
+    sendJson(res, 200, listing(handler, schedule));
+    return;
+  }
+  sendJson(res, 404, { error: "Unknown route." });
 }
 
 function ownedSchedule(handler: Handler, botId: string, id: string): Schedule {
