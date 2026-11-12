@@ -35,6 +35,7 @@ import {
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
+import { lastChatLine } from "@/lib/converter";
 import {
   Tool,
   ToolContent,
@@ -50,7 +51,7 @@ import {
 } from "@companion/shared/protocol";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { PaperclipIcon, XIcon } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 /** The same image limits the daemon stores, offered by the file picker. */
 const imageAccept = imageMimeTypes.join(",");
@@ -63,6 +64,7 @@ export function Chat({
   replyFrom,
   failure,
   locked = false,
+  onPreview,
 }: {
   botId: string;
   name: string;
@@ -72,6 +74,8 @@ export function Chat({
   failure?: string;
   /** True while another bot is being opened, so a message cannot go to this one. */
   locked?: boolean;
+  /** The latest line of this chat, for the row under the bot's name. */
+  onPreview: (botId: string, preview: string) => void;
 }) {
   const transport = useMemo(
     () =>
@@ -95,6 +99,9 @@ export function Chat({
     transport,
   });
   const [formError, setFormError] = useState<string>();
+  useEffect(() => {
+    onPreview(botId, lastChatLine(messages));
+  }, [botId, messages, onPreview]);
   const busy = status === "submitted" || status === "streaming";
   const held = busy || locked;
   const alert = formError ?? error?.message ?? failure;

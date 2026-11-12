@@ -18,17 +18,22 @@ test.describe.configure({ mode: "serial" });
 test("a message streams markdown and a tool call", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/");
-  await expect(page.getByText("What should I help with?")).toBeVisible();
+  await expect(inChat(page, "What should I help with?")).toBeVisible();
+  await expect(preview(page, "Companion")).toHaveText(
+    "Hello. What should I help with?",
+  );
   await page.getByLabel("Message").fill("Say something");
   await page.getByRole("button", { name: "Submit" }).click();
   const replies = page.locator(".is-assistant");
   await expect(replies.filter({ hasText: "Working on it" })).toHaveCount(1);
   await expectBubbles(page);
-  await expect(page.getByText("All finished.")).toHaveCount(0);
+  await expect(inChat(page, "All finished.")).toHaveCount(0);
+  await expect(preview(page, "Companion")).toHaveText("Working on it.");
   release();
   await expect(
     page.locator("[data-streamdown='strong']", { hasText: "All finished." }),
   ).toBeVisible();
+  await expect(preview(page, "Companion")).toContainText("All finished.");
   await expect(page.getByText("read note")).toBeVisible();
   await expect(page.getByText("marigold")).toBeVisible();
 });
@@ -65,7 +70,7 @@ test("a reload mid-turn keeps the reply going", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("Message").fill("Keep going");
   await page.getByRole("button", { name: "Submit" }).click();
-  await expect(page.getByText("Keep going")).toBeVisible();
+  await expect(inChat(page, "Keep going")).toBeVisible();
   await expect(
     page.locator(".is-assistant").filter({ hasText: "Working on it" }),
   ).toHaveCount(3);
@@ -74,7 +79,7 @@ test("a reload mid-turn keeps the reply going", async ({ page }) => {
   });
   await expect(finished).toHaveCount(2);
   await page.reload();
-  await expect(page.getByText("Keep going")).toBeVisible();
+  await expect(inChat(page, "Keep going")).toBeVisible();
   await expect(
     page.locator(".is-assistant").filter({ hasText: "Working on it" }),
   ).toHaveCount(3);
@@ -188,15 +193,20 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Keep going")).toBeVisible();
+  await expect(inChat(page, "Keep going")).toBeVisible();
+  await expect(preview(page, "Companion")).toContainText("All finished.");
   await page.getByRole("button", { name: "New bot" }).click();
   await page.getByRole("textbox", { name: "Name" }).fill("Ada");
   await page.getByRole("button", { name: "Create" }).click();
   await expect(page.getByRole("heading", { name: "Ada" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Rename/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /^Theme:/ })).toBeVisible();
-  await expect(page.getByText("Keep going")).toHaveCount(0);
-  await expect(page.getByText("What should I help with?")).toBeVisible();
+  await expect(inChat(page, "Keep going")).toHaveCount(0);
+  await expect(inChat(page, "What should I help with?")).toBeVisible();
+  await expect(preview(page, "Ada")).toHaveText(
+    "Hello. What should I help with?",
+  );
+  await expect(preview(page, "Companion")).toContainText("All finished.");
 
   await page.getByRole("button", { name: "Ada", exact: true }).click({
     button: "right",
@@ -216,7 +226,10 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
   });
   await page.getByRole("menuitem", { name: "Edit" }).click();
   await page.getByRole("textbox", { name: "Bot name" }).fill("Blurred");
-  await page.getByText("What should I help with?").click();
+  await page
+    .locator("[role='log']")
+    .getByText("What should I help with?")
+    .click();
   await expect(
     page.getByRole("button", { name: "Blurred", exact: true }),
   ).toBeVisible();
@@ -235,11 +248,11 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
 
   await page.getByRole("button", { name: "Companion", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Companion" })).toBeVisible();
-  await expect(page.getByText("Keep going")).toBeVisible();
+  await expect(inChat(page, "Keep going")).toBeVisible();
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "Companion" })).toBeVisible();
-  await expect(page.getByText("Keep going")).toBeVisible();
+  await expect(inChat(page, "Keep going")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Nightly", exact: true }),
   ).toBeVisible();
@@ -262,7 +275,7 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
   await page.getByRole("menuitem", { name: "Delete" }).click();
   await page.getByRole("button", { name: "Delete" }).click();
   await expect(page.getByRole("heading", { name: "Companion" })).toBeVisible();
-  await expect(page.getByText("Keep going")).toBeVisible();
+  await expect(inChat(page, "Keep going")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Bea", exact: true }),
   ).toHaveCount(0);
@@ -275,7 +288,7 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
     page.getByRole("heading", { name: "Delete Companion?" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
-  await expect(page.getByText("Keep going")).toBeVisible();
+  await expect(inChat(page, "Keep going")).toBeVisible();
 
   await page.getByRole("button", { name: "Companion", exact: true }).click({
     button: "right",
@@ -286,7 +299,7 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
   await expect(
     page.getByRole("button", { name: "Companion", exact: true }),
   ).toHaveCount(0);
-  await expect(page.getByText("Keep going")).toHaveCount(0);
+  await expect(inChat(page, "Keep going")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Create a bot" })).toHaveCount(
     0,
   );
@@ -332,7 +345,7 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
   await page.getByRole("textbox", { name: "Name" }).fill("Echo");
   await page.getByRole("button", { name: "Get started" }).click();
   await expect(page.getByRole("heading", { name: "Echo" })).toBeVisible();
-  await expect(page.getByText("What should I help with?")).toBeVisible();
+  await expect(inChat(page, "What should I help with?")).toBeVisible();
   await expect(page.getByRole("button", { name: /^Theme:/ })).toBeVisible();
   await expect(
     page
@@ -360,7 +373,7 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
       .getByRole("button", { name: "Echo", exact: true })
       .locator("[data-shape='sprout']"),
   ).toHaveAttribute("data-color", "#1fbf68");
-  await expect(page.getByText("What should I help with?")).toBeVisible();
+  await expect(inChat(page, "What should I help with?")).toBeVisible();
 
   await page.reload();
   await expect(
@@ -373,9 +386,21 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
       .getByRole("button", { name: "Echo", exact: true })
       .locator("[data-shape='sprout']"),
   ).toHaveAttribute("data-color", "#1fbf68");
-  await expect(page.getByText("What should I help with?")).toBeVisible();
+  await expect(inChat(page, "What should I help with?")).toBeVisible();
 });
 
 function release(): void {
   writeFileSync(gateFile, "go");
+}
+
+/** The latest chat line under one bot's name. */
+function preview(page: Page, name: string) {
+  return page
+    .getByRole("button", { name, exact: true })
+    .locator("[data-slot='bot-preview']");
+}
+
+/** A line in the open conversation. The sidebar repeats the latest one. */
+function inChat(page: Page, text: string) {
+  return page.locator("[role='log']").getByText(text);
 }

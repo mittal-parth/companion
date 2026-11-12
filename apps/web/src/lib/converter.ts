@@ -131,6 +131,28 @@ export function transcriptToMessages(
 }
 
 /**
+ * The line under a bot's name: the latest message, as one row of text.
+ * Reasoning and tool calls are not that line. Bold and code marks are left
+ * out, so the row reads as the sentence. A picture with no words falls
+ * through to the text before it. An empty chat has no line.
+ */
+export function lastChatLine(messages: readonly UIMessage[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message === undefined) continue;
+    const text = message.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join(" ")
+      .replace(/\*\*|__|`/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (text !== "") return text;
+  }
+  return "";
+}
+
+/**
  * Converts one turn's daemon events into the chunks of a single assistant message.
  * The person's own message is not in this stream. It is already stored, and the
  * page rendered it before asking for the reply.

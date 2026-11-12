@@ -15,7 +15,11 @@ import {
 } from "@companion/shared/protocol";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import type { UIMessage } from "ai";
-import { createReplyStream, transcriptToMessages } from "./converter";
+import {
+  createReplyStream,
+  lastChatLine,
+  transcriptToMessages,
+} from "./converter";
 
 /** Where the daemon is listening. Set for the web process, not the browser. */
 export function daemonUrl(): string {
@@ -26,11 +30,15 @@ export function daemonUrl(): string {
   return url.replace(/\/$/, "");
 }
 
-/** A bot in the sidebar: the name, the preset picture, and nothing about its files. */
+/**
+ * A bot in the sidebar: the name, the preset picture, and the latest line
+ * of its chat. The line is empty when that chat has no text yet.
+ */
 export type BotSummary = {
   id: string;
   name: string;
   avatar: BotAvatar;
+  preview: string;
 };
 
 /**
@@ -56,20 +64,31 @@ export async function openFirstBot(): Promise<{
   bots: BotSummary[];
   chat: LoadedBot | null;
 }> {
-  const bots = await listBots();
-  const first = bots[0];
-  if (first === undefined) return { bots, chat: null };
-  return { bots, chat: await loadBot(first.id) };
+  const loaded = await loadEveryBot();
+  const first = loaded[0];
+  if (first === undefined) return { bots: [], chat: null };
+  return { bots: loaded.map(summarize), chat: first };
 }
 
-/** Every bot, oldest first. */
+/** Every bot, oldest first, each with the line under its name. */
 export async function listBots(): Promise<BotSummary[]> {
+  return (await loadEveryBot()).map(summarize);
+}
+
+/** The conversations the sidebar labels, oldest first. */
+async function loadEveryBot(): Promise<LoadedBot[]> {
   const listed = await daemonJson<BotView[]>("/bots");
-  return listed.map((bot) => ({
+  return Promise.all(listed.map((bot) => loadBot(bot.id)));
+}
+
+/** The sidebar's view of one loaded conversation. */
+function summarize(bot: LoadedBot): BotSummary {
+  return {
     id: bot.id,
     name: bot.name,
     avatar: bot.avatar,
-  }));
+    preview: lastChatLine(bot.messages),
+  };
 }
 
 /** The conversation the chat should show for one bot. */

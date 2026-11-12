@@ -8,7 +8,11 @@ import { fileURLToPath } from "node:url";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { RecordedSession } from "@companion/shared";
 import { expect, test } from "vitest";
-import { createReplyStream, transcriptToMessages } from "../src/lib/converter";
+import {
+  createReplyStream,
+  lastChatLine,
+  transcriptToMessages,
+} from "../src/lib/converter";
 
 const pixel =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -77,6 +81,40 @@ test("a stored transcript becomes messages", () => {
   });
   expect(JSON.stringify(assistant?.parts)).not.toContain("available_commands");
   expect(JSON.stringify(assistant?.parts)).not.toContain("usage_update");
+});
+
+test("the sidebar line is the latest message, on one row", () => {
+  expect(lastChatLine([])).toBe("");
+  expect(lastChatLine(transcriptToMessages(fixture.updates))).toBe("marigold");
+  expect(
+    lastChatLine(
+      transcriptToMessages([
+        {
+          sessionUpdate: "agent_message_chunk",
+          content: {
+            type: "text",
+            text: "Already set.\nWednesday and Sunday at 8am, same time.",
+          },
+        },
+      ]),
+    ),
+  ).toBe("Already set. Wednesday and Sunday at 8am, same time.");
+  expect(
+    lastChatLine(
+      transcriptToMessages([
+        {
+          sessionUpdate: "agent_message_chunk",
+          content: {
+            type: "text",
+            text: "Working on it.\n\n**All finished.**",
+          },
+        },
+      ]),
+    ),
+  ).toBe("Working on it. All finished.");
+  expect(lastChatLine(transcriptToMessages([...fixture.updates, image]))).toBe(
+    "marigold",
+  );
 });
 
 test("a live reply streams text, reasoning, tools, and errors", () => {
