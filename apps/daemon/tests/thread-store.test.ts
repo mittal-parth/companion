@@ -7,7 +7,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import type { RecordedSession } from "@companion/shared";
+import {
+  defaultAvatar,
+  type BotAvatar,
+  type RecordedSession,
+} from "@companion/shared";
 import { expect, test } from "vitest";
 import {
   botConversation,
@@ -286,11 +290,74 @@ test("a newer thread database is refused", () => {
     const store = openThreadStore(path);
     store.close();
     const db = new DatabaseSync(path);
-    db.exec("PRAGMA user_version = 4");
+    db.exec("PRAGMA user_version = 5");
     db.close();
     expect(() => openThreadStore(path)).toThrow(
-      "Unsupported thread store version 4.",
+      "Unsupported thread store version 5.",
     );
+  });
+});
+
+test("a bot keeps the avatar it was given", () => {
+  withDirectory((directory) => {
+    const path = join(directory, "threads.db");
+    const store = openThreadStore(path);
+    const bot = store.createBot({
+      name: "Ada",
+      engine: "opencode",
+      avatar: { shape: "cloud", color: "#ec4899" },
+    });
+    expect(bot.avatar).toEqual({ shape: "cloud", color: "#ec4899" });
+    expect(store.createBot({ name: "Bea", engine: "opencode" }).avatar).toEqual(
+      defaultAvatar,
+    );
+    const changed = store.setBotAvatar(bot.id, {
+      shape: "sprout",
+      color: "#1FBF68",
+    } as unknown as BotAvatar);
+    expect(changed).toEqual({
+      ...bot,
+      avatar: { shape: "sprout", color: "#1fbf68" },
+    });
+    expect(store.renameBot(bot.id, "Nightly").avatar).toEqual(changed.avatar);
+    store.close();
+    const restored = openThreadStore(path);
+    expect(restored.getBot(bot.id).avatar).toEqual(changed.avatar);
+    expect(() =>
+      restored.setBotAvatar(bot.id, {
+        shape: "pebble",
+        color: "#1f7cf2",
+      } as unknown as BotAvatar),
+    ).toThrow("An avatar needs a preset shape and color.");
+    expect(() => restored.setBotAvatar("missing", defaultAvatar)).toThrow(
+      "Unknown bot missing.",
+    );
+    restored.close();
+  });
+});
+
+test("a bot stored before avatars keeps the default one", () => {
+  withDirectory((directory) => {
+    const path = join(directory, "threads.db");
+    const db = new DatabaseSync(path);
+    db.exec(`
+      CREATE TABLE bots (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        engine TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO bots (id, name, engine) VALUES ('ada', 'Ada', 'opencode');
+      PRAGMA user_version = 3;
+    `);
+    db.close();
+    const store = openThreadStore(path);
+    expect(store.getBot("ada")).toEqual({
+      id: "ada",
+      name: "Ada",
+      engine: "opencode",
+      avatar: defaultAvatar,
+    });
+    store.close();
   });
 });
 

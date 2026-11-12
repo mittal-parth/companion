@@ -9,9 +9,12 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
+  defaultAvatar,
   engineNames,
+  parseAvatar,
   validateSchedule,
   type Bot,
+  type BotAvatar,
   type EngineName,
   type Schedule,
   type ScheduleReceipt,
@@ -21,7 +24,7 @@ import {
   type ThreadSummary,
 } from "@companion/shared";
 
-const schemaVersion = 3;
+const schemaVersion = 4;
 
 /**
  * Bots, the threads they own, the session updates that form each transcript,
@@ -32,7 +35,9 @@ const schema = `
   CREATE TABLE IF NOT EXISTS bots (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    engine TEXT NOT NULL
+    engine TEXT NOT NULL,
+    avatar_shape TEXT NOT NULL DEFAULT '${defaultAvatar.shape}',
+    avatar_color TEXT NOT NULL DEFAULT '${defaultAvatar.color}'
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS threads (
@@ -68,14 +73,20 @@ const schema = `
 
 /** The daemon's threads, opened on one database file. */
 export type ThreadStore = {
-  /** Records a bot and the engine its new threads start on. */
-  createBot(input: { name: string; engine: EngineName }): Bot;
+  /** Records a bot, its preset avatar, and the engine its new threads start on. */
+  createBot(input: {
+    name: string;
+    engine: EngineName;
+    avatar?: BotAvatar;
+  }): Bot;
   /** Reads one bot back. */
   getBot(id: string): Bot;
   /** Lists every bot, in the order they were created. */
   listBots(): Bot[];
-  /** Changes the name shown for a bot. Its conversation stays the same. */
+  /** Changes the name shown for a bot. Its conversation and avatar stay the same. */
   renameBot(id: string, name: string): Bot;
+  /** Changes the preset picture. The name and the conversation stay the same. */
+  setBotAvatar(id: string, avatar: BotAvatar): Bot;
   /** Removes a bot, its conversation, and its schedules. */
   deleteBot(id: string): void;
   /** Changes the engine new threads copy. Existing threads keep theirs. */
@@ -177,7 +188,8 @@ export function openThreadStore(path: string): ThreadStore {
 
 /**
  * Creates the tables and stamps the file.
- * Nothing has shipped, so an older file is not altered. A newer file is refused.
+ * A version 3 file has bots without an avatar, so those columns are added.
+ * A newer file is refused.
  */
 function migrate(db: DatabaseSync): void {
   const version = readVersion(db);
@@ -185,8 +197,37 @@ function migrate(db: DatabaseSync): void {
     throw new Error(`Unsupported thread store version ${version}.`);
   }
   db.exec(schema);
+  if (version > 0 && version < schemaVersion) {
+    addAvatarColumns(db);
+  }
   if (version < schemaVersion) {
     db.exec(`PRAGMA user_version = ${schemaVersion}`);
+  }
+}
+
+/**
+ * Gives a bot stored before avatars the default picture.
+ * A new file already has the columns. Adding them again would fail.
+ */
+function addAvatarColumns(db: DatabaseSync): void {
+  const names = new Set(
+    db
+      .prepare("PRAGMA table_info(bots)")
+      .all()
+      .map((row) => {
+        const name = row.name;
+        return typeof name === "string" ? name : "";
+      }),
+  );
+  if (!names.has("avatar_shape")) {
+    db.exec(
+      `ALTER TABLE bots ADD COLUMN avatar_shape TEXT NOT NULL DEFAULT '${defaultAvatar.shape}'`,
+    );
+  }
+  if (!names.has("avatar_color")) {
+    db.exec(
+      `ALTER TABLE bots ADD COLUMN avatar_color TEXT NOT NULL DEFAULT '${defaultAvatar.color}'`,
+    );
   }
 }
 
@@ -200,15 +241,18 @@ function readVersion(db: DatabaseSync): number {
 
 function store(db: DatabaseSync): ThreadStore {
   const insertBot = db.prepare(
-    "INSERT INTO bots (id, name, engine) VALUES (?, ?, ?)",
+    "INSERT INTO bots (id, name, engine, avatar_shape, avatar_color) VALUES (?, ?, ?, ?, ?)",
   );
   const selectBot = db.prepare(
-    "SELECT id, name, engine FROM bots WHERE id = ?",
+    "SELECT id, name, engine, avatar_shape, avatar_color FROM bots WHERE id = ?",
   );
   const selectBots = db.prepare(
-    "SELECT id, name, engine FROM bots ORDER BY rowid",
+    "SELECT id, name, engine, avatar_shape, avatar_color FROM bots ORDER BY rowid",
   );
   const updateBotName = db.prepare("UPDATE bots SET name = ? WHERE id = ?");
+  const updateBotAvatar = db.prepare(
+    "UPDATE bots SET avatar_shape = ?, avatar_color = ? WHERE id = ?",
+  );
   const deleteBotReceipts = db.prepare(
     `DELETE FROM schedule_receipts
      WHERE schedule_id IN (SELECT id FROM schedules WHERE bot_id = ?)`,
@@ -295,12 +339,20 @@ function store(db: DatabaseSync): ThreadStore {
 
   return {
     createBot(input) {
+      const avatar = knownAvatar(input.avatar ?? defaultAvatar);
       const bot: Bot = {
         id: randomUUID(),
         name: required(input.name.trim(), "A bot needs a name."),
         engine: readEngine(input.engine),
+        avatar,
       };
-      insertBot.run(bot.id, bot.name, bot.engine);
+      insertBot.run(
+        bot.id,
+        bot.name,
+        bot.engine,
+        bot.avatar.shape,
+        bot.avatar.color,
+      );
       return bot;
     },
 
@@ -315,6 +367,13 @@ function store(db: DatabaseSync): ThreadStore {
     renameBot(id, name) {
       requireBot(id);
       updateBotName.run(required(name.trim(), "A bot needs a name."), id);
+      return requireBot(id);
+    },
+
+    setBotAvatar(id, avatar) {
+      requireBot(id);
+      const next = knownAvatar(avatar);
+      updateBotAvatar.run(next.shape, next.color, id);
       return requireBot(id);
     },
 
@@ -502,7 +561,26 @@ function botFrom(row: SqlRow): Bot {
     id: text(row, "id"),
     name: text(row, "name"),
     engine: readEngine(text(row, "engine")),
+    avatar: storedAvatar(text(row, "avatar_shape"), text(row, "avatar_color")),
   };
+}
+
+/** A picture this app offers. Anything else is refused before it is stored. */
+function knownAvatar(avatar: BotAvatar): BotAvatar {
+  const parsed = parseAvatar(avatar.shape, avatar.color);
+  if (parsed === undefined) {
+    throw new Error("An avatar needs a preset shape and color.");
+  }
+  return parsed;
+}
+
+/** The picture read back from a row. A value outside the preset list is corrupt. */
+function storedAvatar(shape: string, color: string): BotAvatar {
+  const parsed = parseAvatar(shape, color);
+  if (parsed === undefined) {
+    throw new Error("A stored avatar could not be read.");
+  }
+  return parsed;
 }
 
 function summaryFrom(row: SqlRow): ThreadSummary {

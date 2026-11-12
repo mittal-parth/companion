@@ -6,8 +6,8 @@ import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 
 /**
  * A menu opened from a right-click.
- * The sidebar uses it so a bot row can be renamed or deleted without a
- * control that sits in the chat header.
+ * The sidebar uses it so a bot row can be renamed, given another avatar,
+ * or deleted without a control that sits in the chat header.
  */
 function ContextMenu({
   ...props

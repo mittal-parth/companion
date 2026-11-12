@@ -17,12 +17,15 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
+  defaultAvatar,
   engineNames,
   engines,
   isImageMime,
   nextRun,
+  parseAvatar,
   type AttachedImage,
   type Bot,
+  type BotAvatar,
   type BotTranscript,
   type BotView,
   type BrowserLease,
@@ -366,7 +369,7 @@ async function handle(
     }
     if (req.method === "PATCH") {
       const body = await readObject(req);
-      sendJson(res, 200, renameBot(handler, botId, body));
+      sendJson(res, 200, updateBot(handler, botId, body));
       return;
     }
     if (req.method === "DELETE") {
@@ -775,7 +778,8 @@ async function createBot(
   const name = requiredString(body, "name", "A bot needs a name.");
   const engine = engineName(body.engine);
   const description = optionalDescription(body.description);
-  const bot = handler.store.createBot({ name, engine });
+  const avatar = optionalAvatar(body) ?? defaultAvatar;
+  const bot = handler.store.createBot({ name, engine, avatar });
   const directory = resolve(dirname(handler.storePath), "bots", bot.id);
   mkdirSync(directory, { recursive: true });
   writeFileSync(
@@ -807,14 +811,49 @@ async function createBot(
   return view(handler.store, bot);
 }
 
-/** The name the person sees. The conversation and its files stay put. */
-function renameBot(
+/**
+ * The name or the preset picture the person sees.
+ * The conversation and its files stay put. A running turn is left as it is.
+ */
+function updateBot(
   handler: Handler,
   botId: string,
   body: Record<string, unknown>,
 ): BotView {
-  const name = requiredString(body, "name", "A bot needs a name.");
-  return view(handler.store, handler.store.renameBot(botId, name));
+  const name = optionalName(body);
+  const avatar = optionalAvatar(body);
+  if (name === undefined && avatar === undefined) {
+    throw new HttpError(400, "The request needs a name or an avatar.");
+  }
+  if (name !== undefined) handler.store.renameBot(botId, name);
+  if (avatar !== undefined) handler.store.setBotAvatar(botId, avatar);
+  return view(handler.store, handler.store.getBot(botId));
+}
+
+/** A name when the request sent one. A blank name is refused. */
+function optionalName(body: Record<string, unknown>): string | undefined {
+  if (!("name" in body)) return undefined;
+  return requiredString(body, "name", "A bot needs a name.");
+}
+
+/**
+ * A preset shape and color, when the request sent them.
+ * Sending only one of the two is refused. Omitting both leaves the picture.
+ */
+function optionalAvatar(body: Record<string, unknown>): BotAvatar | undefined {
+  const hasShape = "shape" in body;
+  const hasColor = "color" in body;
+  if (!hasShape && !hasColor) return undefined;
+  const shape = body.shape;
+  const color = body.color;
+  const avatar =
+    typeof shape === "string" && typeof color === "string"
+      ? parseAvatar(shape, color)
+      : undefined;
+  if (avatar === undefined) {
+    throw new HttpError(400, "An avatar needs a preset shape and color.");
+  }
+  return avatar;
 }
 
 /**
@@ -863,6 +902,7 @@ function view(store: ThreadStore, bot: Bot): BotView {
     id: bot.id,
     name: bot.name,
     engine: bot.engine,
+    avatar: bot.avatar,
     directory: thread.cwd,
   };
 }

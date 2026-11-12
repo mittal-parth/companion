@@ -102,6 +102,9 @@ importers:
       next:
         specifier: 16.4.5
         version: 16.4.5(@babel/core@7.29.13)(@playwright/test@1.65.0)(@types/node@24.19.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      open-bot-avatar:
+        specifier: 0.2.1
+        version: 0.2.1
       radix-ui:
         specifier: ^1.8.1
         version: 1.8.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -163,6 +166,9 @@ importers:
       croner:
         specifier: ^11.0.0
         version: 11.0.0
+      open-bot-avatar:
+        specifier: 0.2.1
+        version: 0.2.1
 
 packages:
 
@@ -4175,6 +4181,9 @@ packages:
 
   oniguruma-to-es@4.3.6:
     resolution: {integrity: sha512-csuQ9x3Yr0cEIs/Zgx/OEt9iBw9vqIunAPQkx19R/fiMq2oGVTgcMqO/V3Ybqefr1TBvosI6jU539ksaBULJyA==}
+
+  open-bot-avatar@0.2.1:
+    resolution: {integrity: sha512-J0SBBtSt0sIIbuUeekkdURJcS1O5k/en7zlYrGzfX8HXPv7zR4mArl3Dqipt3RIez0LXvAXiP9uN7n1tcwrlcw==}
 
   open@11.0.4:
     resolution: {integrity: sha512-++Zlftm0kVLPmzC06t6epuWmcRMDbI4z5P3NNX979WA/k23+NtSOynEGzsVfZwguKw2mi5umVgnBlJQMwRz4Pg==}
@@ -9566,6 +9575,8 @@ snapshots:
       oniguruma-parser: 0.12.2
       regex: 6.1.0
       regex-recursion: 6.0.2
+
+  open-bot-avatar@0.2.1: {}
 
   open@11.0.4:
     dependencies:

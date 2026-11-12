@@ -245,9 +245,16 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
   ).toBeVisible();
 
   await page.getByRole("button", { name: "New bot" }).click();
+  await page.getByRole("radio", { name: "Orange" }).click();
+  await page.getByRole("radio", { name: "Lightbulb" }).click();
   await page.getByRole("textbox", { name: "Name" }).fill("Bea");
   await page.getByRole("button", { name: "Create" }).click();
   await expect(page.getByRole("heading", { name: "Bea" })).toBeVisible();
+  await expect(
+    page
+      .getByRole("heading", { name: "Bea" })
+      .locator("[data-shape='lightbulb']"),
+  ).toHaveAttribute("data-color", "#ff6a1a");
   await page.getByRole("button", { name: "Companion", exact: true }).click();
   await page.getByRole("button", { name: "Bea", exact: true }).click({
     button: "right",
@@ -303,22 +310,70 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
   });
   await page.getByRole("menuitem", { name: "Delete" }).click();
   await page.getByRole("button", { name: "Delete" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Create a bot" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "New Bot" })).toBeVisible();
   await expect(page.getByLabel("Message")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /^Theme:/ })).toBeVisible();
-  await expect(page.getByText("No bots yet")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Create your first Bot" }),
+  ).toBeVisible();
+  await expect(page.getByText("No chats yet")).toBeVisible();
+  await expect(page.getByText("Night Shift")).toHaveCount(0);
+  await expect(page.getByText("Inbox Triage")).toHaveCount(0);
 
   await page.reload();
+  await expect(page.getByRole("heading", { name: "New Bot" })).toBeVisible();
+  await page.getByRole("radio", { name: "Pink" }).click();
+  await page.getByRole("radio", { name: "Cloud" }).click();
   await expect(
-    page.getByRole("heading", { name: "Create a bot" }),
-  ).toBeVisible();
+    page
+      .getByRole("heading", { name: "New Bot" })
+      .locator("[data-shape='cloud']"),
+  ).toHaveAttribute("data-color", "#ec4899");
   await page.getByRole("textbox", { name: "Name" }).fill("Echo");
-  await page.getByRole("button", { name: "Create" }).click();
+  await page.getByRole("button", { name: "Get started" }).click();
   await expect(page.getByRole("heading", { name: "Echo" })).toBeVisible();
   await expect(page.getByText("What should I help with?")).toBeVisible();
   await expect(page.getByRole("button", { name: /^Theme:/ })).toBeVisible();
+  await expect(
+    page
+      .getByRole("button", { name: "Echo", exact: true })
+      .locator("[data-shape='cloud']"),
+  ).toHaveAttribute("data-color", "#ec4899");
+
+  await page.getByRole("button", { name: "Echo", exact: true }).click({
+    button: "right",
+  });
+  await page.getByRole("menuitem", { name: "Change avatar" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Change avatar" }),
+  ).toBeVisible();
+  await page.getByRole("radio", { name: "Green" }).click();
+  await page.getByRole("radio", { name: "Sprout" }).click();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(
+    page
+      .getByRole("heading", { name: "Echo" })
+      .locator("[data-shape='sprout']"),
+  ).toHaveAttribute("data-color", "#1fbf68");
+  await expect(
+    page
+      .getByRole("button", { name: "Echo", exact: true })
+      .locator("[data-shape='sprout']"),
+  ).toHaveAttribute("data-color", "#1fbf68");
+  await expect(page.getByText("What should I help with?")).toBeVisible();
+
+  await page.reload();
+  await expect(
+    page
+      .getByRole("heading", { name: "Echo" })
+      .locator("[data-shape='sprout']"),
+  ).toHaveAttribute("data-color", "#1fbf68");
+  await expect(
+    page
+      .getByRole("button", { name: "Echo", exact: true })
+      .locator("[data-shape='sprout']"),
+  ).toHaveAttribute("data-color", "#1fbf68");
+  await expect(page.getByText("What should I help with?")).toBeVisible();
 });
 
 function release(): void {

@@ -27,6 +27,7 @@
     "motion": "^14.12.0",
     "nanoid": "^6.0.2",
     "next": "16.4.5",
+    "open-bot-avatar": "0.2.1",
     "radix-ui": "^1.8.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",

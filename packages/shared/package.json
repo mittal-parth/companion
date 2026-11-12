@@ -4,10 +4,12 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./avatar": "./src/avatar.ts",
     "./protocol": "./src/protocol.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.4.0",
-    "croner": "^11.0.0"
+    "croner": "^11.0.0",
+    "open-bot-avatar": "0.2.1"
   }
 }
