@@ -460,6 +460,47 @@ test("two bots keep separate folders and opening turns", async () => {
   });
 });
 
+test("a bot can be renamed without touching its conversation", async () => {
+  await withDaemon(
+    scripted([{ updates: [hello], stopReason: "end_turn" }]),
+    async (daemon) => {
+      const bot = await createBot(daemon, "Ada");
+      const renamed = await fetch(`${daemon.url}/bots/${bot.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "  Nightly  " }),
+      });
+      expect(renamed.status).toBe(200);
+      expect(await renamed.json()).toMatchObject({
+        id: bot.id,
+        name: "Nightly",
+        directory: bot.directory,
+      });
+      const stored = (await (
+        await fetch(`${daemon.url}/bots/${bot.id}`)
+      ).json()) as BotTranscript;
+      expect(stored.name).toBe("Nightly");
+      expect(stored.updates).toEqual([hello]);
+      const blank = await fetch(`${daemon.url}/bots/${bot.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "  " }),
+      });
+      expect(blank.status).toBe(400);
+      const missing = await fetch(`${daemon.url}/bots/missing`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Bea" }),
+      });
+      expect(missing.status).toBe(404);
+      const wrong = await fetch(`${daemon.url}/bots/${bot.id}`, {
+        method: "PUT",
+      });
+      expect(wrong.status).toBe(405);
+    },
+  );
+});
+
 test("two bots can take a turn at the same time", async () => {
   let release: () => void = () => {};
   const hold = new Promise<void>((resolve) => {

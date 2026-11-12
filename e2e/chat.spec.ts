@@ -135,6 +135,60 @@ function background(page: Page): Promise<string> {
   return page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 }
 
+test("a second bot has its own conversation and a rename sticks", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByText("Keep going")).toBeVisible();
+  await page.getByRole("button", { name: "New bot" }).click();
+  await page.getByRole("textbox", { name: "Name" }).fill("Ada");
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByRole("button", { name: "Rename Ada" })).toBeVisible();
+  await expect(page.getByText("Keep going")).toHaveCount(0);
+  await expect(page.getByText("What should I help with?")).toBeVisible();
+
+  await page.getByRole("button", { name: "Companion", exact: true }).click();
+  await expect(page.getByText("Keep going")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Rename Companion" }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Ada", exact: true }).click();
+  await page.getByRole("button", { name: "Rename Ada" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Theme:/ })).toBeVisible();
+  const name = page.getByRole("textbox", { name: "Bot name" });
+  await name.fill("Draft");
+  await name.press("Escape");
+  await expect(page.getByRole("button", { name: "Rename Ada" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Rename Ada" }).click();
+  await page.getByRole("textbox", { name: "Bot name" }).fill("Blurred");
+  await page.getByText("What should I help with?").click();
+  await expect(
+    page.getByRole("button", { name: "Rename Blurred" }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Rename Blurred" }).click();
+  await page.getByRole("textbox", { name: "Bot name" }).fill("Nightly");
+  await page.getByRole("textbox", { name: "Bot name" }).press("Enter");
+  await expect(
+    page.getByRole("button", { name: "Nightly", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Rename Nightly" }),
+  ).toBeVisible();
+
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Rename Companion" }),
+  ).toBeVisible();
+  await expect(page.getByText("Keep going")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Nightly", exact: true }),
+  ).toBeVisible();
+});
+
 function release(): void {
   writeFileSync(gateFile, "go");
 }

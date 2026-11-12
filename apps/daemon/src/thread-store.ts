@@ -74,6 +74,8 @@ export type ThreadStore = {
   getBot(id: string): Bot;
   /** Lists every bot, in the order they were created. */
   listBots(): Bot[];
+  /** Changes the name shown for a bot. Its conversation stays the same. */
+  renameBot(id: string, name: string): Bot;
   /** Changes the engine new threads copy. Existing threads keep theirs. */
   setBotEngine(id: string, engine: EngineName): Bot;
   /** Starts a thread for a bot, copying that bot's engine. */
@@ -204,6 +206,7 @@ function store(db: DatabaseSync): ThreadStore {
   const selectBots = db.prepare(
     "SELECT id, name, engine FROM bots ORDER BY rowid",
   );
+  const updateBotName = db.prepare("UPDATE bots SET name = ? WHERE id = ?");
   const updateBotEngine = db.prepare("UPDATE bots SET engine = ? WHERE id = ?");
   const insertThread = db.prepare(
     "INSERT INTO threads (id, bot_id, engine, cwd) VALUES (?, ?, ?, ?)",
@@ -292,6 +295,12 @@ function store(db: DatabaseSync): ThreadStore {
 
     listBots() {
       return selectBots.all().map((row) => botFrom(row));
+    },
+
+    renameBot(id, name) {
+      requireBot(id);
+      updateBotName.run(required(name.trim(), "A bot needs a name."), id);
+      return requireBot(id);
     },
 
     setBotEngine(id, engine) {

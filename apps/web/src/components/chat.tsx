@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * The one conversation on this computer.
- * A turn that was already running is resumed from the daemon, which replays
- * the reply, so a reload does not show it twice.
+ * One bot's conversation.
+ * The shell decides which bot this is. A turn that was already running is
+ * resumed from the daemon, which replays the reply, so a reload does not
+ * show it twice.
  */
 import {
   Conversation,
@@ -34,7 +35,6 @@ import {
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
-import { AppHeader } from "@/components/theme-toggle";
 import {
   Tool,
   ToolContent,
@@ -57,16 +57,21 @@ const imageAccept = imageMimeTypes.join(",");
 
 export function Chat({
   botId,
+  name,
   messages: initialMessages,
   resume,
   replyFrom,
   failure,
+  locked = false,
 }: {
   botId: string;
+  name: string;
   messages: UIMessage[];
   resume: boolean;
   replyFrom?: number;
   failure?: string;
+  /** True while another bot is being opened, so a message cannot go to this one. */
+  locked?: boolean;
 }) {
   const transport = useMemo(
     () =>
@@ -91,17 +96,17 @@ export function Chat({
   });
   const [formError, setFormError] = useState<string>();
   const busy = status === "submitted" || status === "streaming";
+  const held = busy || locked;
   const alert = formError ?? error?.message ?? failure;
 
   return (
-    <div className="mx-auto flex h-dvh w-full max-w-3xl flex-col">
-      <AppHeader title="Companion" />
+    <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
       <Conversation>
         <ConversationContent>
           {messages.length === 0 ? (
             <ConversationEmptyState
               description="Send a message to start."
-              title="Companion"
+              title={name}
             />
           ) : (
             messages.map((message, index) => (
@@ -137,7 +142,7 @@ export function Chat({
           onError={(reason) => setFormError(reason.message)}
           onSubmit={(message) => {
             setFormError(undefined);
-            if (busy) return;
+            if (held) return;
             void send(message);
           }}
         >
@@ -145,15 +150,15 @@ export function Chat({
           <PromptInputBody>
             <PromptInputTextarea
               aria-label="Message"
-              disabled={busy}
-              placeholder="Message Companion"
+              disabled={held}
+              placeholder={`Message ${name}`}
             />
           </PromptInputBody>
           <PromptInputFooter>
             <PromptInputTools>
-              <AttachButton disabled={busy} />
+              <AttachButton disabled={held} />
             </PromptInputTools>
-            <PromptInputSubmit disabled={busy} />
+            <PromptInputSubmit disabled={held} />
           </PromptInputFooter>
         </PromptInput>
       </div>

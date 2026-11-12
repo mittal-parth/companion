@@ -15,7 +15,7 @@ import {
 } from "@companion/shared/protocol";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import type { UIMessage } from "ai";
-import { createReplyStream } from "./converter";
+import { createReplyStream, transcriptToMessages } from "./converter";
 
 /** Where the daemon is listening. Set for the web process, not the browser. */
 export function daemonUrl(): string {
@@ -26,15 +26,73 @@ export function daemonUrl(): string {
   return url.replace(/\/$/, "");
 }
 
+/** A bot in the sidebar: the name, and nothing about its files. */
+export type BotSummary = {
+  id: string;
+  name: string;
+};
+
 /**
- * The bot the page talks to.
- * The first one is reused. A fresh daemon gets a bot named Companion.
+ * One bot, ready for the chat.
+ * A running turn is only the part before its reply, so the client can resume it.
  */
-export async function ensureDefaultBot(): Promise<BotTranscript> {
+export type LoadedBot = {
+  id: string;
+  name: string;
+  messages: UIMessage[];
+  resume: boolean;
+  replyFrom?: number;
+  failure?: string;
+};
+
+/**
+ * The first bot, creating Companion when this computer has none.
+ * Opening the page uses this bot. It does not remember which one was open last.
+ */
+export async function openFirstBot(): Promise<{
+  bots: BotSummary[];
+  chat: LoadedBot;
+}> {
+  let bots = await listBots();
+  if (bots.length === 0) {
+    const created = await createBot("Companion");
+    bots = [{ id: created.id, name: created.name }];
+  }
+  const first = bots[0];
+  if (first === undefined) {
+    throw new Error("The daemon has no bot.");
+  }
+  return { bots, chat: await loadBot(first.id) };
+}
+
+/** Every bot, oldest first. */
+export async function listBots(): Promise<BotSummary[]> {
   const listed = await daemonJson<BotView[]>("/bots");
-  const first = listed[0];
-  const id = first?.id ?? (await createBot("Companion")).id;
-  return daemonJson<BotTranscript>(`/bots/${encodeURIComponent(id)}`);
+  return listed.map((bot) => ({ id: bot.id, name: bot.name }));
+}
+
+/** The conversation the chat should show for one bot. */
+export async function loadBot(id: string): Promise<LoadedBot> {
+  const bot = await daemonJson<BotTranscript>(
+    `/bots/${encodeURIComponent(id)}`,
+  );
+  const turn = bot.turn;
+  if (turn.status === "running") {
+    return {
+      id: bot.id,
+      name: bot.name,
+      messages: transcriptToMessages(bot.updates.slice(0, turn.replyFrom)),
+      resume: true,
+      replyFrom: turn.replyFrom,
+    };
+  }
+  return {
+    id: bot.id,
+    name: bot.name,
+    messages: transcriptToMessages(bot.updates),
+    resume: false,
+    failure: turn.status === "failed" ? turn.error : undefined,
+  };
 }
 
 /** The daemon's server-sent events, one TurnEvent at a time. */

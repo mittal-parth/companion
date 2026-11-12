@@ -114,6 +114,30 @@ test("a bot has one conversation", () => {
   });
 });
 
+test("a bot keeps its conversation when it is renamed", () => {
+  withDirectory((directory) => {
+    const path = join(directory, "threads.db");
+    const store = openThreadStore(path);
+    const bot = store.createBot({ name: "Ada", engine: "opencode" });
+    const thread = store.createThread({ botId: bot.id, cwd: "/bots/ada" });
+    const renamed = store.renameBot(bot.id, "  Nightly  ");
+    expect(renamed).toEqual({ ...bot, name: "Nightly" });
+    expect(store.listThreads(bot.id)).toEqual([
+      expect.objectContaining({ id: thread.id, botId: bot.id }),
+    ]);
+    store.close();
+    const restored = openThreadStore(path);
+    expect(restored.getBot(bot.id).name).toBe("Nightly");
+    expect(() => restored.renameBot(bot.id, "  ")).toThrow(
+      "A bot needs a name.",
+    );
+    expect(() => restored.renameBot("missing", "Bea")).toThrow(
+      "Unknown bot missing.",
+    );
+    restored.close();
+  });
+});
+
 test("a thread without a session cannot be resumed", () => {
   withDirectory((directory) => {
     const store = openThreadStore(join(directory, "threads.db"));
