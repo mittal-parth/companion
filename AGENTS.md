@@ -10,4 +10,13 @@
 
 ## Pull request media
 
-Images and videos in a pull request body must be files under `/opt/cursor/artifacts/`, cited by absolute path in a markdown image or a video tag, and updated through the pull-request tool, which uploads them. Linking the agent artifacts page, or hand-writing a cursor.com URL, does not attach the file. Screenshots can stay as images.
+Cite a screenshot as a markdown image, and a recording as `<video src="/opt/cursor/artifacts/<name>.mp4"></video>`. The file must already be under `/opt/cursor/artifacts/`. Update the pull request body through the pull-request tool so it uploads the file.
+
+For a recording, the tool rewrites that video tag into a poster image linked to the agent artifacts page. That poster is the attachment. Leave the rewrite as the tool wrote it.
+
+Do not:
+
+- Copy or rename the mp4, including to `.bin`, and cite that copy. GitHub serves the copy as a file download.
+- Hand-write a cursor.com URL, an `artifacts/c/art-...` URL, or a link to the agent artifacts page. A URL you type does not attach the file.
+- Replace the tool's poster with a download link, a markdown link to the file, or a video tag whose src is a URL.
+- Cite a recording as an image, or a screenshot as a video, to get around the rewrite.
