@@ -92,21 +92,24 @@ test("the theme choice changes the page and stays after reload", async ({
   await expect(root).not.toHaveClass(/\bdark\b/);
   const light = await background(page);
 
-  await page.getByRole("radio", { name: "Dark" }).click();
+  await page.getByRole("button", { name: "Theme: System" }).click();
+  await page.getByRole("menuitemradio", { name: "Dark" }).click();
   await expect(root).toHaveAttribute("data-theme", "dark");
   await expect(root).toHaveClass(/\bdark\b/);
   await expect.poll(() => background(page)).not.toBe(light);
 
   await page.reload();
-  await expect(page.getByRole("radio", { name: "Dark" })).toBeChecked();
+  await expect(page.getByRole("button", { name: "Theme: Dark" })).toBeVisible();
   await expect(root).toHaveClass(/\bdark\b/);
   await expect.poll(() => background(page)).not.toBe(light);
 
-  await page.getByRole("radio", { name: "Light" }).click();
+  await page.getByRole("button", { name: "Theme: Dark" }).click();
+  await page.getByRole("menuitemradio", { name: "Light" }).click();
   await expect(root).not.toHaveClass(/\bdark\b/);
   await expect.poll(() => background(page)).toBe(light);
 
-  await page.getByRole("radio", { name: "System" }).click();
+  await page.getByRole("button", { name: "Theme: Light" }).click();
+  await page.getByRole("menuitemradio", { name: "System" }).click();
   await expect(root).toHaveAttribute("data-theme", "system");
   // The system listener is attached after paint. Wait for that frame, then
   // change the operating system so the missed event is not the one we assert.

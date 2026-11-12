@@ -1,13 +1,19 @@
 "use client";
 
 /**
- * The Light, Dark, and System control.
+ * A small theme menu for Light, Dark, and System.
  * The root layout's boot script has already painted the saved choice.
  * This keeps that choice after React loads, and follows the operating
  * system for as long as System stays selected.
  */
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   applyTheme,
   readStoredThemeChoice,
@@ -17,13 +23,10 @@ import {
   themeChoices,
   type ThemeChoice,
 } from "@/lib/theme";
-import {
-  useLayoutEffect,
-  useSyncExternalStore,
-  type KeyboardEvent,
-} from "react";
+import { MonitorIcon, MoonIcon, SunIcon } from "lucide-react";
+import { useLayoutEffect, useSyncExternalStore, type ReactNode } from "react";
 
-/** The words shown for each choice, in the same order as the control. */
+/** The words shown for each choice. */
 function themeLabel(choice: ThemeChoice): string {
   switch (choice) {
     case "light":
@@ -32,6 +35,22 @@ function themeLabel(choice: ThemeChoice): string {
       return "Dark";
     case "system":
       return "System";
+    default: {
+      const exhaustive: never = choice;
+      return exhaustive;
+    }
+  }
+}
+
+/** The mark on the closed control, so the current choice is visible without the menu. */
+function ThemeIcon({ choice }: { choice: ThemeChoice }): ReactNode {
+  switch (choice) {
+    case "light":
+      return <SunIcon />;
+    case "dark":
+      return <MoonIcon />;
+    case "system":
+      return <MonitorIcon />;
     default: {
       const exhaustive: never = choice;
       return exhaustive;
@@ -56,59 +75,41 @@ export function ThemeToggle({ className }: { className?: string }) {
     return () => media.removeEventListener("change", followSystem);
   }, [choice]);
 
-  function select(next: ThemeChoice) {
-    saveThemeChoice(next);
-  }
-
-  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const index = themeChoices.indexOf(choice);
-    let nextIndex = index;
-    switch (event.key) {
-      case "ArrowRight":
-      case "ArrowDown":
-        nextIndex = (index + 1) % themeChoices.length;
-        break;
-      case "ArrowLeft":
-      case "ArrowUp":
-        nextIndex = (index - 1 + themeChoices.length) % themeChoices.length;
-        break;
+  function select(next: string) {
+    switch (next) {
+      case "light":
+      case "dark":
+      case "system":
+        saveThemeChoice(next);
+        return;
       default:
         return;
     }
-    event.preventDefault();
-    const next = themeChoices[nextIndex];
-    if (next === undefined) return;
-    select(next);
-    event.currentTarget
-      .querySelector<HTMLButtonElement>(`[data-theme-choice="${next}"]`)
-      ?.focus();
   }
 
   return (
-    <div
-      aria-label="Theme"
-      className={cn(
-        "flex items-center rounded-lg border border-border p-0.5",
-        className,
-      )}
-      onKeyDown={onKeyDown}
-      role="radiogroup"
-    >
-      {themeChoices.map((item) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
         <Button
-          aria-checked={choice === item}
-          data-theme-choice={item}
-          key={item}
-          onClick={() => select(item)}
-          role="radio"
-          size="xs"
+          aria-label={`Theme: ${themeLabel(choice)}`}
+          className={className}
+          size="icon-xs"
           type="button"
-          variant={choice === item ? "secondary" : "ghost"}
+          variant="ghost"
         >
-          {themeLabel(item)}
+          <ThemeIcon choice={choice} />
         </Button>
-      ))}
-    </div>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuRadioGroup onValueChange={select} value={choice}>
+          {themeChoices.map((item) => (
+            <DropdownMenuRadioItem key={item} value={item}>
+              {themeLabel(item)}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
