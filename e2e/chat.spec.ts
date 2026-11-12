@@ -22,6 +22,7 @@ test("a message streams markdown and a tool call", async ({ page }) => {
   await expect(preview(page, "Companion")).toHaveText(
     "Hello. What should I help with?",
   );
+  await expect(page.locator("[data-turn-status]")).toHaveCount(0);
   await page.getByLabel("Message").fill("Say something");
   await page.getByRole("button", { name: "Submit" }).click();
   const replies = page.locator(".is-assistant");
@@ -29,6 +30,8 @@ test("a message streams markdown and a tool call", async ({ page }) => {
   await expectBubbles(page);
   await expect(inChat(page, "All finished.")).toHaveCount(0);
   await expect(preview(page, "Companion")).toHaveText("Working on it.");
+  await expect(page.getByText("read note")).toHaveCount(0);
+  await expectTurnStatus(page);
   release();
   await expect(
     page.locator("[data-streamdown='strong']", { hasText: "All finished." }),
@@ -36,6 +39,7 @@ test("a message streams markdown and a tool call", async ({ page }) => {
   await expect(preview(page, "Companion")).toContainText("All finished.");
   await expect(page.getByText("read note")).toBeVisible();
   await expect(page.getByText("marigold")).toBeVisible();
+  await expect(page.locator("[data-turn-status]")).toHaveCount(0);
 });
 
 test("an image is shown and stored", async ({ page }) => {
@@ -52,6 +56,7 @@ test("an image is shown and stored", async ({ page }) => {
   await expect(
     page.locator(".is-assistant").filter({ hasText: "Working on it" }),
   ).toHaveCount(2);
+  await expect(page.locator("[data-turn-status]")).toBeVisible();
   const url = readFileSync(daemonUrlFile, "utf8").trim();
   const bots = (await (await fetch(`${url}/bots`)).json()) as Array<{
     id: string;
@@ -64,6 +69,7 @@ test("an image is shown and stored", async ({ page }) => {
   await expect(
     page.locator("[data-streamdown='strong']", { hasText: "All finished." }),
   ).toHaveCount(2);
+  await expect(page.locator("[data-turn-status]")).toHaveCount(0);
 });
 
 test("a reload mid-turn keeps the reply going", async ({ page }) => {
@@ -74,18 +80,22 @@ test("a reload mid-turn keeps the reply going", async ({ page }) => {
   await expect(
     page.locator(".is-assistant").filter({ hasText: "Working on it" }),
   ).toHaveCount(3);
+  const status = page.locator("[data-turn-status]");
+  await expect(status).toBeVisible();
   const finished = page.locator("[data-streamdown='strong']", {
     hasText: "All finished.",
   });
   await expect(finished).toHaveCount(2);
   await page.reload();
   await expect(inChat(page, "Keep going")).toBeVisible();
+  await expect(status).toBeVisible();
   await expect(
     page.locator(".is-assistant").filter({ hasText: "Working on it" }),
   ).toHaveCount(3);
   await expect(finished).toHaveCount(2);
   release();
   await expect(finished).toHaveCount(3);
+  await expect(page.locator("[data-turn-status]")).toHaveCount(0);
 });
 
 test("the theme choice changes the page and stays after reload", async ({
@@ -183,6 +193,28 @@ async function expectBubbles(page: Page): Promise<void> {
   });
   expect(colors.assistant?.background).toBe("rgb(238, 238, 238)");
   expect(colors.assistant?.radius).toBe("14px");
+}
+
+/** The row under the bot's latest reply: its picture, three dots, and a line that changes. */
+async function expectTurnStatus(page: Page): Promise<void> {
+  const status = page.locator("[data-turn-status]");
+  await expect(status).toBeVisible();
+  await expect(status.locator("[data-shape='controller']")).toHaveAttribute(
+    "data-mood",
+    "thinking",
+  );
+  await expect(status.locator("[data-turn-dot]")).toHaveCount(3);
+  const look = await status.getAttribute("data-look");
+  await expect(status).not.toHaveAttribute("data-look", look ?? "", {
+    timeout: 4_000,
+  });
+  const line = await status.getAttribute("data-status-line");
+  await expect(status).not.toHaveAttribute("data-status-line", line ?? "", {
+    timeout: 6_000,
+  });
+  await expect(status).toContainText(
+    /Collecting details|Working on it|Thinking it through|Checking the thread|Putting it together/,
+  );
 }
 
 function background(page: Page): Promise<string> {
