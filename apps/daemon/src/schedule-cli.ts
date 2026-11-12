@@ -8,6 +8,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { weekdayIndex } from "@companion/shared/schedule";
 import type { ScheduleAccess, ScheduleCommand } from "@companion/shared";
 
 const usage = `schedule create --prompt "text" --cron "0 9 * * *" --tz Asia/Kolkata
@@ -18,16 +19,6 @@ schedule pause <id>
 schedule resume <id>
 schedule delete <id>
 schedule help`;
-
-const weekdaysByName: Record<string, number> = {
-  sun: 0,
-  mon: 1,
-  tue: 2,
-  wed: 3,
-  thu: 4,
-  fri: 5,
-  sat: 6,
-};
 
 /** Arguments that failed to parse, with the message to show the bot. */
 export class ScheduleUsageError extends Error {}
@@ -343,11 +334,13 @@ function weekdays(value: string): number[] {
     .filter((day) => day !== "");
   if (days.length === 0) fail("--weekdays needs at least one day.");
   return days.map((day) => {
-    if (day in weekdaysByName) return weekdaysByName[day] ?? 0;
-    if (/^[0-6]$/.test(day)) return Number(day);
-    fail(
-      `--weekdays has an unknown day "${day}". Use sun, mon, tue, wed, thu, fri, sat or 0 to 6.`,
-    );
+    const index = weekdayIndex(day);
+    if (index === null) {
+      fail(
+        `--weekdays has an unknown day "${day}". Use sun, mon, tue, wed, thu, fri, sat or 0 to 6.`,
+      );
+    }
+    return index;
   });
 }
 

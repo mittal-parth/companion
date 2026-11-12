@@ -489,6 +489,7 @@ function invalid(reason: string): ScheduleValidation {
   return { ok: false, reason };
 }
 
+/** Cron order. Index 0 is Sunday, and the short name is the first three letters. */
 const weekdayNames = [
   "Sunday",
   "Monday",
@@ -499,15 +500,19 @@ const weekdayNames = [
   "Saturday",
 ] as const;
 
-const weekdayAlias: Record<string, number> = {
-  sun: 0,
-  mon: 1,
-  tue: 2,
-  wed: 3,
-  thu: 4,
-  fri: 5,
-  sat: 6,
-};
+/**
+ * The cron index of a weekday.
+ * A name is its first three letters, in any case. A digit is 0 through 6.
+ */
+export function weekdayIndex(token: string): number | null {
+  const normalized = token.trim().toLowerCase();
+  const named = weekdayNames.findIndex(
+    (name) => name.slice(0, 3).toLowerCase() === normalized,
+  );
+  if (named !== -1) return named;
+  if (!/^[0-6]$/.test(normalized)) return null;
+  return Number(normalized);
+}
 
 function describeCron(expression: string): string {
   const [minute, hour, day, month, weekday] = expression.split(" ");
@@ -649,11 +654,6 @@ function parseWeekdayField(field: string): number[] | null {
 }
 
 function weekdayNumber(token: string): number | null {
-  const named = weekdayAlias[token.toLowerCase()];
-  if (named !== undefined) return named;
-  if (!/^\d+$/.test(token)) return null;
-  const day = Number(token);
-  if (day === 7) return 0;
-  if (day < 0 || day > 6) return null;
-  return day;
+  if (token === "7") return 0;
+  return weekdayIndex(token);
 }

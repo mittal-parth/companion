@@ -254,6 +254,7 @@ export {
   nextRun,
   nextRuns,
   validateSchedule,
+  weekdayIndex,
   type CronSchedule,
   type IntervalSchedule,
   type OnceSchedule,
