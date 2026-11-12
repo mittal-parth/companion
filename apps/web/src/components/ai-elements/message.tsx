@@ -34,8 +34,8 @@ export type MessageProps = HTMLAttributes<HTMLDivElement> & {
 export const Message = ({ className, from, ...props }: MessageProps) => (
   <div
     className={cn(
-      "group flex w-full max-w-[95%] flex-col gap-2",
-      from === "user" ? "is-user ml-auto justify-end" : "is-assistant",
+      "group flex w-full flex-col gap-2",
+      from === "user" ? "is-user items-end" : "is-assistant items-start",
       className,
     )}
     {...props}
@@ -44,6 +44,10 @@ export const Message = ({ className, from, ...props }: MessageProps) => (
 
 export type MessageContentProps = HTMLAttributes<HTMLDivElement>;
 
+/**
+ * The words of one turn, as a bubble.
+ * The person's bubble is black and sits on the right. The bot's is gray and sits on the left.
+ */
 export const MessageContent = ({
   children,
   className,
@@ -51,9 +55,11 @@ export const MessageContent = ({
 }: MessageContentProps) => (
   <div
     className={cn(
-      "is-user:dark flex w-fit min-w-0 max-w-full flex-col gap-2 overflow-hidden text-sm",
-      "group-[.is-user]:ml-auto group-[.is-user]:rounded-lg group-[.is-user]:bg-secondary group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-foreground",
-      "group-[.is-assistant]:text-foreground",
+      "is-user:dark flex w-fit min-w-0 max-w-[75%] flex-col gap-2 overflow-hidden rounded-xl px-3 py-3 text-sm",
+      "group-[.is-user]:bg-black group-[.is-user]:text-white",
+      "dark:group-[.is-user]:outline dark:group-[.is-user]:outline-1 dark:group-[.is-user]:-outline-offset-1 dark:group-[.is-user]:outline-white/25",
+      "group-[.is-assistant]:bg-[#eeeeee] group-[.is-assistant]:text-foreground",
+      "dark:group-[.is-assistant]:bg-zinc-800 dark:group-[.is-assistant]:text-zinc-100",
       className,
     )}
     {...props}
