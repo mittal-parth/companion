@@ -1,4 +1,4 @@
-# Bot address
+# Phase 3.2c
 
 Each bot keeps the id the daemon already stored. The page puts that id in the address: `/bots/<id>`. Visiting that address opens that bot, and a refresh opens it again. Choosing a bot in the sidebar, creating one, or deleting the open one updates the address. Deleting the open bot moves to the next bot's address, or to `/` when it was the last.
 
