@@ -132,7 +132,7 @@ User's EC2 VM (hardened image):
 - **3.3 Bot avatars.** Each bot picks a preset shape and color from [open-bot-avatar](https://github.com/DominikScholz/open-bot-avatar), on create and again later. Generate and upload stay out. See issue 19. _Done when:_ the chosen avatar shows in the sidebar and the header, and it survives a reload.
 - **3.4 Schedules in the UI.** Schedules are view-only plus an enable/disable switch: no create or edit form, and no cron field. Changing a schedule is done by asking the bot in chat, and the bot updates it through the CLI (Task 2.6). The list shows each job's next run and last receipt. _Done when:_ a scheduled result appears in that bot's conversation, toggling a schedule stops and resumes it, and the UI has no way to change its time or prompt.
 - **3.5 Activity view.** Live tool calls, file changes, command output and the browser and desktop steps from Task 2.9 (with screenshots where the agent took them). This comes before approvals because approval cards need something to point at. _Done when:_ a running turn shows each step as it happens.
-- **3.6 Approval cards.** Allow or deny from the UI, shown alongside the step in the activity view. _Done when:_ denying in the UI stops the tool call (tested end to end).
+- **3.6 Approval cards.** Allow or deny from the UI, shown alongside the step in the activity view. _Done when:_ denying in the UI stops the tool call (tested end to end). See `docs/phase-3-6.md`.
 
 ## Phase 4: one VM in the cloud
 

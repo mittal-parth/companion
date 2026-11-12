@@ -98,6 +98,38 @@ test("a reload mid-turn keeps the reply going", async ({ page }) => {
   await expect(page.locator("[data-turn-status]")).toHaveCount(0);
 });
 
+test("denying an approval stops the tool call", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Message").fill("Read the vault");
+  await page.getByRole("button", { name: "Submit" }).click();
+  const card = page.locator("[data-approval='tool-vault']");
+  await expect(card.getByRole("button", { name: "Allow" })).toBeVisible();
+  await expect(card.getByRole("button", { name: "Deny" })).toBeVisible();
+  await expect(page.getByText("read vault")).toBeVisible();
+  const status = page.locator("[data-turn-status]");
+  await expect(status).toBeVisible();
+  await expect(status.locator("[data-turn-dot]")).toHaveCount(3);
+  await expect(status.locator("[data-shape='controller']")).toHaveAttribute(
+    "data-mood",
+    "thinking",
+  );
+  await expect(status).toContainText(
+    /Collecting details|Working on it|Thinking it through|Checking the thread|Putting it together/,
+  );
+  await expect(page.getByText("cobalt")).toHaveCount(0);
+  await expect(page.getByText("read note")).toHaveCount(0);
+  await card.getByRole("button", { name: "Deny" }).click();
+  await expect(
+    page.getByRole("log").getByText("This step needs a decision."),
+  ).toBeVisible();
+  await expect(page.getByText("read vault")).toHaveCount(0);
+  await expect(page.getByText("Denied")).toHaveCount(0);
+  await expect(page.getByText("cobalt")).toHaveCount(0);
+  await expect(page.getByText("read note")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Deny" })).toHaveCount(0);
+  await expect(status).toHaveCount(0);
+});
+
 test("the theme choice changes the page and stays after reload", async ({
   page,
 }) => {
@@ -226,7 +258,9 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
 }) => {
   await page.goto("/");
   await expect(inChat(page, "Keep going")).toBeVisible();
-  await expect(preview(page, "Companion")).toContainText("All finished.");
+  await expect(preview(page, "Companion")).toContainText(
+    "This step needs a decision.",
+  );
   await page.getByRole("button", { name: "New bot" }).click();
   await page.getByRole("textbox", { name: "Name" }).fill("Ada");
   await page.getByRole("button", { name: "Create" }).click();
@@ -238,7 +272,9 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
   await expect(preview(page, "Ada")).toHaveText(
     "Hello. What should I help with?",
   );
-  await expect(preview(page, "Companion")).toContainText("All finished.");
+  await expect(preview(page, "Companion")).toContainText(
+    "This step needs a decision.",
+  );
 
   await page.getByRole("button", { name: "Ada", exact: true }).click({
     button: "right",

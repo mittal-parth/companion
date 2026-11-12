@@ -15,7 +15,9 @@ import { join } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   defaultAvatar,
+  parseTurnEvent,
   parseTurnEvents,
+  type ApprovalDecision,
   type AttachedImage,
   type BotTranscript,
   type BotView,
@@ -926,6 +928,101 @@ test("an image of the wrong type is refused before a turn", async () => {
   );
 });
 
+test("denying an approval stops the tool call", async () => {
+  const secret = "cobalt";
+  await withDaemon(askingEngine(secret), async (daemon) => {
+    const bot = await createBot(daemon, "Content");
+    const early = await postJson(daemon, `/bots/${bot.id}/approvals`, {
+      toolCallId: "tool-vault",
+      decision: "deny",
+    });
+    expect(early.status).toBe(404);
+
+    const response = await postJson(daemon, `/bots/${bot.id}/messages`, {
+      text: "Read the vault",
+    });
+    expect(response.status).toBe(200);
+    const turn = openEvents(response);
+    await turn.until((events) =>
+      events.some((event) => event.event === "approval"),
+    );
+    expect(turn.events).toContainEqual({
+      event: "approval",
+      data: {
+        sessionId: "scripted",
+        toolCallId: "tool-vault",
+        title: "read vault",
+      },
+    });
+
+    const replay = openEvents(
+      await fetch(`${daemon.url}/bots/${bot.id}/events`),
+    );
+    expect(replay.status).toBe(200);
+    await replay.until((events) =>
+      events.some((event) => event.event === "approval"),
+    );
+    await replay.cancel();
+
+    const bad = await postJson(daemon, `/bots/${bot.id}/approvals`, {
+      toolCallId: "tool-vault",
+      decision: "maybe",
+    });
+    expect(bad.status).toBe(400);
+
+    const denied = await postJson(daemon, `/bots/${bot.id}/approvals`, {
+      toolCallId: "tool-vault",
+      decision: "deny",
+    });
+    expect(denied.status).toBe(200);
+    expect(await denied.json()).toEqual({
+      toolCallId: "tool-vault",
+      decision: "deny",
+    });
+
+    await turn.until((events) =>
+      events.some((event) => event.event === "done"),
+    );
+    expect(JSON.stringify(turn.events)).not.toContain(secret);
+    expect(turn.events.at(-1)).toEqual({
+      event: "done",
+      data: { stopReason: "cancelled" },
+    });
+    const stored = JSON.stringify(
+      await (await fetch(`${daemon.url}/bots/${bot.id}`)).json(),
+    );
+    expect(stored).not.toContain(secret);
+    expect(stored).toContain("The user declined this tool call");
+  });
+});
+
+test("allowing an approval lets the tool call finish", async () => {
+  const secret = "cobalt";
+  await withDaemon(askingEngine(secret), async (daemon) => {
+    const bot = await createBot(daemon, "Content");
+    const response = await postJson(daemon, `/bots/${bot.id}/messages`, {
+      text: "Read the vault",
+    });
+    const turn = openEvents(response);
+    await turn.until((events) =>
+      events.some((event) => event.event === "approval"),
+    );
+    const allowed = await postJson(daemon, `/bots/${bot.id}/approvals`, {
+      toolCallId: "tool-vault",
+      decision: "allow",
+    });
+    expect(allowed.status).toBe(200);
+    await turn.until((events) =>
+      events.some((event) => event.event === "done"),
+    );
+    expect(JSON.stringify(turn.events)).toContain(secret);
+    expect(turn.events.at(-1)).toEqual({
+      event: "done",
+      data: { stopReason: "end_turn" },
+    });
+  });
+});
+
 /** The update the daemon stores for a person's text. */
 function said(text: string): acp.SessionUpdate {
   return {
@@ -938,6 +1035,104 @@ function readAccess(directory: string): ScheduleAccess {
   return JSON.parse(
     readFileSync(join(directory, ".companion", "schedule.json"), "utf8"),
   ) as ScheduleAccess;
+}
+
+function askingEngine(secret: string): Engine {
+  let resolveDecision: ((decision: ApprovalDecision) => void) | undefined;
+  return {
+    async prompt(_botId, text, onUpdate, _images, onApproval) {
+      if (text.startsWith("Your name is")) {
+        onUpdate(hello);
+        return "end_turn";
+      }
+      onUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-vault",
+        title: "read vault",
+        status: "pending",
+        rawInput: { path: "vault.txt" },
+      });
+      const decision = await new Promise<ApprovalDecision>((resolve) => {
+        resolveDecision = resolve;
+        onApproval?.({
+          sessionId: "scripted",
+          toolCallId: "tool-vault",
+          title: "read vault",
+        });
+      });
+      if (decision === "deny") {
+        onUpdate({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tool-vault",
+          status: "failed",
+          rawOutput: { error: "The user declined this tool call" },
+        });
+        return "cancelled";
+      }
+      onUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-vault",
+        status: "completed",
+        content: [
+          {
+            type: "content",
+            content: { type: "text", text: secret },
+          },
+        ],
+      });
+      return "end_turn";
+    },
+    answer(_botId, toolCallId, decision) {
+      if (toolCallId !== "tool-vault" || resolveDecision === undefined) {
+        return false;
+      }
+      const resolve = resolveDecision;
+      resolveDecision = undefined;
+      resolve(decision);
+      return true;
+    },
+    async close() {},
+  };
+}
+
+function openEvents(response: Response): {
+  status: number;
+  events: TurnEvent[];
+  until(done: (events: TurnEvent[]) => boolean): Promise<void>;
+  cancel(): Promise<void>;
+} {
+  if (response.body == null) throw new Error("The turn did not stream.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const events: TurnEvent[] = [];
+  return {
+    status: response.status,
+    events,
+    async until(done) {
+      const deadline = Date.now() + 2_000;
+      while (!done(events)) {
+        if (Date.now() > deadline) {
+          throw new Error(`The turn stalled at ${JSON.stringify(events)}.`);
+        }
+        const next = await reader.read();
+        if (next.done) break;
+        buffer += decoder.decode(next.value, { stream: true });
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() ?? "";
+        for (const block of blocks) {
+          const event = parseTurnEvent(block);
+          if (event !== undefined) events.push(event);
+        }
+      }
+      if (!done(events)) {
+        throw new Error(`The turn ended early at ${JSON.stringify(events)}.`);
+      }
+    },
+    async cancel() {
+      await reader.cancel().catch(() => undefined);
+    },
+  };
 }
 
 function scripted(
