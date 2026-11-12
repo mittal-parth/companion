@@ -7,3 +7,7 @@
 - Have doc comments for methods and files focused on the purpose of the method. Don't focus too much on the technical tid bits but rather the purpose of the method.
 - Inline comments explaining the change at important points in the method are welcome. However, don't add incremental comments explaining the diff that just happened in that change. Remember, focus is on the overall purpose.
 - Prefer existing, maintained components and libraries (AI Elements, shadcn, the AI SDK) over writing our own, and customise them only lightly.
+
+## Pull request media
+
+Images and videos in a pull request body must be files under `/opt/cursor/artifacts/`, cited by absolute path in a markdown image or a video tag, and updated through the pull-request tool, which uploads them. Linking the agent artifacts page, or hand-writing a cursor.com URL, does not attach the file. Screenshots can stay as images.
