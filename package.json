@@ -19,6 +19,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.65.0",
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.119.0",
     "eslint": "^9",
     "prettier": "^3",
     "tsx": "^4.23.15",

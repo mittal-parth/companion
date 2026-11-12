@@ -2,13 +2,16 @@
  * The open bot, or a short explanation when that bot cannot be opened.
  * Home and /bots/<id> both use this, so a failure looks the same.
  */
+import { AccountMenu } from "@/components/account-menu";
 import { BotShell } from "@/components/bot-shell";
 import { AppHeader } from "@/components/theme-toggle";
 import type { BotSummary, LoadedBot } from "@/lib/daemon";
 
 export function BotScreen({
+  avatarUrl,
   opened,
 }: {
+  avatarUrl: string | null;
   opened:
     | { ok: true; bots: BotSummary[]; chat: LoadedBot | null }
     | { ok: false; message: string };
@@ -20,10 +23,15 @@ export function BotScreen({
         <main className="flex flex-1 items-center justify-center p-8">
           <p className="max-w-md text-muted-foreground">{opened.message}</p>
         </main>
+        <div className="p-2">
+          <AccountMenu avatarUrl={avatarUrl} />
+        </div>
       </div>
     );
   }
-  return <BotShell bots={opened.bots} chat={opened.chat} />;
+  return (
+    <BotShell avatarUrl={avatarUrl} bots={opened.bots} chat={opened.chat} />
+  );
 }
 
 /**

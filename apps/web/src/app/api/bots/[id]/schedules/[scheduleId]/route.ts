@@ -3,12 +3,15 @@
  * The time and the prompt stay as the bot stored them.
  */
 import { ScheduleRequestError, setScheduleEnabled } from "@/lib/schedules";
+import { refuseUnsigned } from "@/lib/supabase/server";
 import { connection } from "next/server";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ id: string; scheduleId: string }> },
 ) {
+  const denied = await refuseUnsigned();
+  if (denied) return denied;
   await connection();
   const { id, scheduleId } = await context.params;
   let body: unknown;

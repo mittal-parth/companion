@@ -8,6 +8,14 @@
 - Inline comments explaining the change at important points in the method are welcome. However, don't add incremental comments explaining the diff that just happened in that change. Remember, focus is on the overall purpose.
 - Prefer existing, maintained components and libraries (AI Elements, shadcn, the AI SDK) over writing our own, and customise them only lightly.
 
+## Signing in
+
+The app is closed until someone is signed in. Google is the button on the sign-in page. Do not run that flow.
+
+`pnpm dev` also shows an email and password form under that button. Fill it with `BINDU_DEV_EMAIL` and `BINDU_DEV_PASS`. The app reads `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. Do not print any of those values. A production build does not show the email form.
+
+After sign-in, `/` opens the first bot on this computer. Sign out is the account icon at the bottom left of the sidebar.
+
 ## Pull request media
 
 Cite a screenshot as a markdown image, and a recording as `<video src="/opt/cursor/artifacts/<name>.mp4"></video>`. The file must already be under `/opt/cursor/artifacts/`. Update the pull request body through the pull-request tool so it uploads the file.

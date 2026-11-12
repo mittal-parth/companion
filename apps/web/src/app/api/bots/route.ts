@@ -3,11 +3,14 @@
  * The reply is that bot's conversation, so the page can show the greeting.
  */
 import { daemonError, daemonFetch, loadBot } from "@/lib/daemon";
+import { refuseUnsigned } from "@/lib/supabase/server";
 import { parseAvatar } from "@companion/shared/avatar";
 import type { BotView } from "@companion/shared";
 import { connection } from "next/server";
 
 export async function POST(request: Request) {
+  const denied = await refuseUnsigned();
+  if (denied) return denied;
   await connection();
   let body: unknown;
   try {

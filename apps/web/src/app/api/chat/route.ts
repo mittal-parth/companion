@@ -2,6 +2,7 @@
  * Sends the person's latest message to their bot and streams the reply.
  * File parts become the images the daemon already knows how to store.
  */
+import { refuseUnsigned } from "@/lib/supabase/server";
 import { connection } from "next/server";
 import {
   chatResponse,
@@ -12,6 +13,8 @@ import {
 import type { UIMessage } from "ai";
 
 export async function POST(request: Request) {
+  const denied = await refuseUnsigned();
+  if (denied) return denied;
   await connection();
   let body: unknown;
   try {

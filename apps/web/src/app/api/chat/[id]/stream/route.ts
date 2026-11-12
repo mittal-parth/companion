@@ -3,6 +3,7 @@
  * The daemon replays the reply from `from`, then follows it live.
  * With nothing to replay and no turn running, the answer is 204.
  */
+import { refuseUnsigned } from "@/lib/supabase/server";
 import { connection } from "next/server";
 import { chatResponse, daemonError, daemonFetch } from "@/lib/daemon";
 
@@ -10,6 +11,8 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  const denied = await refuseUnsigned();
+  if (denied) return denied;
   await connection();
   const { id } = await context.params;
   const from = new URL(request.url).searchParams.get("from");
