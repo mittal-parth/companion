@@ -2,9 +2,10 @@
 
 /**
  * The sidebar of this computer's bots, and the conversation that is open.
- * A right-click on a row edits the name, changes the preset avatar, or
- * deletes the bot. Edit replaces the row's name with a text field: Enter or
- * leaving the field saves, and Escape keeps the previous name. The chat
+ * Under each name is the latest line of that chat. A right-click on a row
+ * edits the name, changes the preset avatar, or deletes the bot. Edit
+ * replaces the row's name with a text field. Enter or leaving the field
+ * saves, and Escape keeps the previous name. The chat
  * header shows that same avatar and the name, beside the theme control.
  * Delete asks first, then removes the bot and its conversation. The next bot
  * opens, or the one above when the deleted bot was last in the list. The last
@@ -43,6 +44,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { lastChatLine } from "@/lib/converter";
 import type { BotSummary, LoadedBot } from "@/lib/daemon";
 import {
   defaultAvatar,
@@ -50,7 +52,7 @@ import {
   type BotAvatar as ChosenAvatar,
 } from "@companion/shared/avatar";
 import { PlusIcon } from "lucide-react";
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 export function BotShell({
   bots: initialBots,
@@ -81,6 +83,13 @@ export function BotShell({
   const [deleting, setDeleting] = useState(false);
   const createNameRef = useRef<HTMLInputElement>(null);
   const renameLock = useRef(false);
+  const rememberPreview = useCallback((botId: string, preview: string) => {
+    setBots((list) => {
+      const current = list.find((bot) => bot.id === botId);
+      if (current === undefined || current.preview === preview) return list;
+      return list.map((bot) => (bot.id === botId ? { ...bot, preview } : bot));
+    });
+  }, []);
   // Bumped when an edit starts or is dropped, so a late blur cannot save it.
   const renameGeneration = useRef(0);
   const renameSession = renameGeneration.current;
@@ -169,7 +178,10 @@ export function BotShell({
                               type="button"
                             >
                               <BotAvatar avatar={bot.avatar} size={40} />
-                              <span className="truncate">{bot.name}</span>
+                              <BotRowText
+                                name={bot.name}
+                                preview={bot.preview}
+                              />
                             </SidebarMenuButton>
                           </ContextMenuTrigger>
                           <ContextMenuContent>
@@ -238,6 +250,7 @@ export function BotShell({
             locked={switching}
             messages={chat.messages}
             name={chat.name}
+            onPreview={rememberPreview}
             replyFrom={chat.replyFrom}
             resume={chat.resume}
           />
@@ -471,6 +484,13 @@ export function BotShell({
       if (!response.ok || !isLoadedBot(body)) {
         throw new Error(messageFrom(body, "The bot could not be opened."));
       }
+      setBots((list) =>
+        list.map((bot) =>
+          bot.id === body.id
+            ? { ...bot, preview: lastChatLine(body.messages) }
+            : bot,
+        ),
+      );
       setChat(body);
       return true;
     } catch (error) {
@@ -504,7 +524,12 @@ export function BotShell({
       }
       setBots((list) => [
         ...list,
-        { id: body.id, name: body.name, avatar: body.avatar },
+        {
+          id: body.id,
+          name: body.name,
+          avatar: body.avatar,
+          preview: lastChatLine(body.messages),
+        },
       ]);
       setChat(body);
       setCreateName("");
@@ -661,6 +686,24 @@ export function BotShell({
       setSavingAvatar(false);
     }
   }
+}
+
+/** The name, and the latest line of that chat under it. */
+function BotRowText({ name, preview }: { name: string; preview: string }) {
+  return (
+    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span className="min-w-0 truncate leading-5">{name}</span>
+      {preview === "" ? null : (
+        <span
+          aria-hidden="true"
+          className="min-w-0 truncate text-xs font-normal leading-4 text-sidebar-foreground/60"
+          data-slot="bot-preview"
+        >
+          {preview}
+        </span>
+      )}
+    </div>
+  );
 }
 
 /** The picture and name in the chat header. The picture is decorative. */
