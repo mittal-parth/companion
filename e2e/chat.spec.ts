@@ -16,12 +16,14 @@ const pixel =
 test.describe.configure({ mode: "serial" });
 
 test("a message streams markdown and a tool call", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/");
   await expect(page.getByText("What should I help with?")).toBeVisible();
   await page.getByLabel("Message").fill("Say something");
   await page.getByRole("button", { name: "Submit" }).click();
   const replies = page.locator(".is-assistant");
   await expect(replies.filter({ hasText: "Working on it" })).toHaveCount(1);
+  await expectBubbles(page);
   await expect(page.getByText("All finished.")).toHaveCount(0);
   release();
   await expect(
@@ -130,6 +132,53 @@ test("the theme choice changes the page and stays after reload", async ({
   await expect(root).toHaveAttribute("data-theme", "system");
   await expect(root).toHaveClass(/\bdark\b/);
 });
+
+/** The person's words are a black bubble on the right. The bot's are gray on the left. */
+async function expectBubbles(page: Page): Promise<void> {
+  const column = await page.locator("[role='log']").boundingBox();
+  const user = await page
+    .locator(".is-user > div", { hasText: "Say something" })
+    .boundingBox();
+  const assistant = await page
+    .locator(".is-assistant > div", { hasText: "Working on it" })
+    .boundingBox();
+  expect(column).toBeTruthy();
+  expect(user).toBeTruthy();
+  expect(assistant).toBeTruthy();
+  if (column == null || user == null || assistant == null) return;
+  expect(assistant.x).toBeLessThan(user.x);
+  expect(user.x + user.width).toBeGreaterThan(assistant.x + assistant.width);
+  expect(assistant.x - column.x).toBeGreaterThan(8);
+  expect(assistant.x - column.x).toBeLessThan(40);
+  expect(column.x + column.width - (user.x + user.width)).toBeGreaterThan(8);
+  expect(column.x + column.width - (user.x + user.width)).toBeLessThan(40);
+
+  const colors = await page.evaluate(() => {
+    const paint = (selector: string, text: string) => {
+      const bubble = [...document.querySelectorAll(selector)].find((node) =>
+        node.textContent?.includes(text),
+      );
+      if (!(bubble instanceof HTMLElement)) return null;
+      const style = getComputedStyle(bubble);
+      return {
+        background: style.backgroundColor,
+        color: style.color,
+        radius: style.borderTopLeftRadius,
+      };
+    };
+    return {
+      user: paint(".is-user > div", "Say something"),
+      assistant: paint(".is-assistant > div", "Working on it"),
+    };
+  });
+  expect(colors.user).toEqual({
+    background: "rgb(0, 0, 0)",
+    color: "rgb(255, 255, 255)",
+    radius: "14px",
+  });
+  expect(colors.assistant?.background).toBe("rgb(238, 238, 238)");
+  expect(colors.assistant?.radius).toBe("14px");
+}
 
 function background(page: Page): Promise<string> {
   return page.evaluate(() => getComputedStyle(document.body).backgroundColor);

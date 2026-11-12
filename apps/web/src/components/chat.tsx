@@ -50,7 +50,7 @@ import {
 } from "@companion/shared/protocol";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { PaperclipIcon, XIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 /** The same image limits the daemon stores, offered by the file picker. */
 const imageAccept = imageMimeTypes.join(",");
@@ -111,16 +111,14 @@ export function Chat({
           ) : (
             messages.map((message, index) => (
               <Message from={message.role} key={message.id}>
-                <MessageContent>
-                  <MessageParts
-                    message={message}
-                    streaming={
-                      busy &&
-                      message.role === "assistant" &&
-                      index === messages.length - 1
-                    }
-                  />
-                </MessageContent>
+                <MessageParts
+                  message={message}
+                  streaming={
+                    busy &&
+                    message.role === "assistant" &&
+                    index === messages.length - 1
+                  }
+                />
               </Message>
             ))
           )}
@@ -187,6 +185,11 @@ function waiting(messages: UIMessage[]): boolean {
   );
 }
 
+/**
+ * The pieces of one turn.
+ * Words and pictures share a bubble. A tool call or a thought stays beside
+ * that bubble, so the bubble itself is only what was said.
+ */
 function MessageParts({
   message,
   streaming,
@@ -194,44 +197,64 @@ function MessageParts({
   message: UIMessage;
   streaming: boolean;
 }) {
-  return message.parts.map((part, index) => {
+  const rendered: ReactNode[] = [];
+  let bubble: ReactNode[] = [];
+  let bubbleKey = 0;
+
+  const flushBubble = () => {
+    if (bubble.length === 0) return;
+    const words = bubble;
+    bubble = [];
+    rendered.push(
+      <MessageContent key={`bubble-${bubbleKey}`}>{words}</MessageContent>,
+    );
+    bubbleKey += 1;
+  };
+
+  message.parts.forEach((part, index) => {
     if (part.type === "text") {
+      if (part.text === "") return;
       if (message.role === "user") {
-        return <p key={index}>{part.text}</p>;
+        bubble.push(<p key={index}>{part.text}</p>);
+        return;
       }
-      return (
+      bubble.push(
         <MessageResponse
           isAnimating={streaming && part.state === "streaming"}
           key={index}
         >
           {part.text}
-        </MessageResponse>
+        </MessageResponse>,
       );
-    }
-    if (part.type === "reasoning") {
-      return (
-        <Reasoning
-          isStreaming={streaming && part.state === "streaming"}
-          key={part.id ?? index}
-        >
-          <ReasoningTrigger />
-          <ReasoningContent>{part.text}</ReasoningContent>
-        </Reasoning>
-      );
+      return;
     }
     if (part.type === "file" && part.mediaType.startsWith("image")) {
-      return (
+      bubble.push(
         // eslint-disable-next-line @next/next/no-img-element -- a data URL of the person's image
         <img
           alt="Attached image"
           className="max-h-48 rounded-md"
           key={index}
           src={part.url}
-        />
+        />,
       );
+      return;
+    }
+    flushBubble();
+    if (part.type === "reasoning") {
+      rendered.push(
+        <Reasoning
+          isStreaming={streaming && part.state === "streaming"}
+          key={part.id ?? index}
+        >
+          <ReasoningTrigger />
+          <ReasoningContent>{part.text}</ReasoningContent>
+        </Reasoning>,
+      );
+      return;
     }
     if (part.type === "dynamic-tool") {
-      return (
+      rendered.push(
         <Tool defaultOpen key={part.toolCallId}>
           <ToolHeader
             state={part.state}
@@ -248,11 +271,12 @@ function MessageParts({
               }
             />
           </ToolContent>
-        </Tool>
+        </Tool>,
       );
     }
-    return null;
   });
+  flushBubble();
+  return rendered;
 }
 
 function Attachments() {
