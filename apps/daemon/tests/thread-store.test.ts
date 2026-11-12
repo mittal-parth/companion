@@ -138,6 +138,53 @@ test("a bot keeps its conversation when it is renamed", () => {
   });
 });
 
+test("deleting a bot removes its conversation and leaves the others", () => {
+  withDirectory((directory) => {
+    const path = join(directory, "threads.db");
+    const store = openThreadStore(path);
+    const ada = store.createBot({ name: "Ada", engine: "opencode" });
+    const bea = store.createBot({ name: "Bea", engine: "opencode" });
+    const thread = store.createThread({ botId: ada.id, cwd: "/bots/ada" });
+    store.appendUpdate(thread.id, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "hello" },
+    });
+    store.createThread({ botId: bea.id, cwd: "/bots/bea" });
+    const dropped = {
+      id: "weather",
+      botId: ada.id,
+      prompt: "Check the weather",
+      kind: "once" as const,
+      at: 1_700_000_000_000,
+    };
+    const kept = {
+      id: "later",
+      botId: bea.id,
+      prompt: "Stay",
+      kind: "once" as const,
+      at: 1_800_000_000_000,
+    };
+    store.saveSchedule(dropped);
+    store.recordReceipt(dropped.id, dropped.at, "ran");
+    store.saveSchedule(kept);
+    store.deleteBot(ada.id);
+    expect(store.listBots()).toEqual([bea]);
+    expect(() => store.getBot(ada.id)).toThrow(`Unknown bot ${ada.id}.`);
+    expect(() => store.getThread(thread.id)).toThrow(
+      `Unknown thread ${thread.id}.`,
+    );
+    expect(store.listThreads().map((item) => item.botId)).toEqual([bea.id]);
+    expect(store.listSchedules()).toEqual([kept]);
+    expect(() => store.deleteBot(ada.id)).toThrow(`Unknown bot ${ada.id}.`);
+    store.close();
+
+    const restored = openThreadStore(path);
+    expect(restored.listBots()).toEqual([bea]);
+    expect(restored.listSchedules()).toEqual([kept]);
+    restored.close();
+  });
+});
+
 test("a thread without a session cannot be resumed", () => {
   withDirectory((directory) => {
     const store = openThreadStore(join(directory, "threads.db"));

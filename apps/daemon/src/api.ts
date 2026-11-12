@@ -13,8 +13,8 @@ import {
   type ServerResponse,
 } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
   engineNames,
@@ -369,7 +369,11 @@ async function handle(
       sendJson(res, 200, renameBot(handler, botId, body));
       return;
     }
-    sendJson(res, 405, { error: "Use GET or PATCH." });
+    if (req.method === "DELETE") {
+      sendJson(res, 200, deleteBot(handler, botId));
+      return;
+    }
+    sendJson(res, 405, { error: "Use GET, PATCH, or DELETE." });
     return;
   }
   if (parts.length === 3 && parts[2] === "messages") {
@@ -811,6 +815,46 @@ function renameBot(
 ): BotView {
   const name = requiredString(body, "name", "A bot needs a name.");
   return view(handler.store, handler.store.renameBot(botId, name));
+}
+
+/**
+ * Removes one bot and the conversation it owns.
+ * A turn that is still running is left alone, so its updates are not written
+ * into a conversation that has already gone. Schedules are stopped first,
+ * then the folder beside the database is removed.
+ */
+function deleteBot(handler: Handler, botId: string): { deleted: string } {
+  handler.store.getBot(botId);
+  if (handler.busy.has(botId)) {
+    throw new HttpError(409, "This bot is already working on a turn.");
+  }
+  const directory = botConversation(handler.store, botId).cwd;
+  for (const schedule of handler.scheduler().list(botId)) {
+    handler.scheduler().delete(schedule.id);
+  }
+  handler.store.deleteBot(botId);
+  handler.turns.delete(botId);
+  handler.followers.delete(botId);
+  for (const [token, owner] of handler.access.tokens) {
+    if (owner === botId) handler.access.tokens.delete(token);
+  }
+  const folder = ownedBotFolder(handler, directory);
+  if (folder !== undefined) rmSync(folder, { recursive: true, force: true });
+  return { deleted: botId };
+}
+
+/**
+ * The folder createBot made for this bot, and only that folder.
+ * A directory outside `bots/` next to the database is left on disk.
+ */
+function ownedBotFolder(
+  handler: Handler,
+  directory: string,
+): string | undefined {
+  const root = resolve(dirname(handler.storePath), "bots");
+  const target = resolve(directory);
+  if (target === root || !target.startsWith(`${root}${sep}`)) return undefined;
+  return target;
 }
 
 function view(store: ThreadStore, bot: Bot): BotView {

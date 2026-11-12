@@ -30,6 +30,20 @@ const daemon = await startDaemon({
 });
 writeFileSync(daemonUrlFile, daemon.url);
 
+// The page no longer creates a bot when the list is empty. The browser tests
+// start from a conversation, so this server makes the first one.
+const seeded = await fetch(`${daemon.url}/bots`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ name: "Companion" }),
+});
+if (!seeded.ok) {
+  console.error(await seeded.text());
+  await daemon.close();
+  rmSync(directory, { recursive: true, force: true });
+  process.exit(1);
+}
+
 const nextBin = join(here, "../../web/node_modules/next/dist/bin/next");
 const next = spawn(
   process.execPath,

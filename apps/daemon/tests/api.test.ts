@@ -501,6 +501,94 @@ test("a bot can be renamed without touching its conversation", async () => {
   );
 });
 
+test("deleting a bot removes its conversation, folder, and schedules", async () => {
+  await withDaemon(
+    scripted([
+      { updates: [hello], stopReason: "end_turn" },
+      { updates: [hello], stopReason: "end_turn" },
+    ]),
+    async (daemon) => {
+      const ada = await createBot(daemon, "Ada");
+      const bea = await createBot(daemon, "Bea");
+      writeFileSync(join(ada.directory, "note.txt"), "keep");
+      const kept = daemon.createSchedule({
+        id: "kept",
+        botId: bea.id,
+        prompt: "Stay",
+        kind: "once",
+        at: 4_000_000_000_000,
+      });
+      daemon.createSchedule({
+        id: "dropped",
+        botId: ada.id,
+        prompt: "Go",
+        kind: "once",
+        at: 4_000_000_000_000,
+      });
+      const removed = await fetch(`${daemon.url}/bots/${ada.id}`, {
+        method: "DELETE",
+      });
+      expect(removed.status).toBe(200);
+      expect(await removed.json()).toEqual({ deleted: ada.id });
+      expect(existsSync(ada.directory)).toBe(false);
+      expect(existsSync(bea.directory)).toBe(true);
+      expect((await fetch(`${daemon.url}/bots/${ada.id}`)).status).toBe(404);
+      expect(await (await fetch(`${daemon.url}/bots`)).json()).toEqual([
+        expect.objectContaining({ id: bea.id, name: "Bea" }),
+      ]);
+      expect(daemon.listSchedules()).toEqual([kept]);
+      const again = await fetch(`${daemon.url}/bots/${ada.id}`, {
+        method: "DELETE",
+      });
+      expect(again.status).toBe(404);
+      const message = await postJson(daemon, `/bots/${ada.id}/messages`, {
+        text: "hello",
+      });
+      expect(message.status).toBe(404);
+    },
+  );
+});
+
+test("a bot in a turn is not deleted", async () => {
+  let release: () => void = () => {};
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const engine: Engine = {
+    async prompt(_botId, text, onUpdate) {
+      if (text.startsWith("Your name is")) {
+        onUpdate(hello);
+        return "end_turn";
+      }
+      await hold;
+      onUpdate(hello);
+      return "end_turn";
+    },
+    async close() {},
+  };
+  await withDaemon(engine, async (daemon) => {
+    const bot = await createBot(daemon, "Ada");
+    const turn = readTurn(daemon, bot.id, "work");
+    try {
+      await waitForTurn(daemon, bot.id, "running");
+      const removed = await fetch(`${daemon.url}/bots/${bot.id}`, {
+        method: "DELETE",
+      });
+      expect(removed.status).toBe(409);
+      expect(existsSync(bot.directory)).toBe(true);
+      expect((await fetch(`${daemon.url}/bots/${bot.id}`)).status).toBe(200);
+    } finally {
+      release();
+    }
+    await turn;
+    const removed = await fetch(`${daemon.url}/bots/${bot.id}`, {
+      method: "DELETE",
+    });
+    expect(removed.status).toBe(200);
+    expect(existsSync(bot.directory)).toBe(false);
+  });
+});
+
 test("two bots can take a turn at the same time", async () => {
   let release: () => void = () => {};
   const hold = new Promise<void>((resolve) => {

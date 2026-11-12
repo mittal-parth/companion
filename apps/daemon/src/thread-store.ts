@@ -76,6 +76,8 @@ export type ThreadStore = {
   listBots(): Bot[];
   /** Changes the name shown for a bot. Its conversation stays the same. */
   renameBot(id: string, name: string): Bot;
+  /** Removes a bot, its conversation, and its schedules. */
+  deleteBot(id: string): void;
   /** Changes the engine new threads copy. Existing threads keep theirs. */
   setBotEngine(id: string, engine: EngineName): Bot;
   /** Starts a thread for a bot, copying that bot's engine. */
@@ -207,6 +209,19 @@ function store(db: DatabaseSync): ThreadStore {
     "SELECT id, name, engine FROM bots ORDER BY rowid",
   );
   const updateBotName = db.prepare("UPDATE bots SET name = ? WHERE id = ?");
+  const deleteBotReceipts = db.prepare(
+    `DELETE FROM schedule_receipts
+     WHERE schedule_id IN (SELECT id FROM schedules WHERE bot_id = ?)`,
+  );
+  const deleteBotUpdates = db.prepare(
+    `DELETE FROM updates
+     WHERE thread_id IN (SELECT id FROM threads WHERE bot_id = ?)`,
+  );
+  const deleteBotSchedules = db.prepare(
+    "DELETE FROM schedules WHERE bot_id = ?",
+  );
+  const deleteBotThreads = db.prepare("DELETE FROM threads WHERE bot_id = ?");
+  const deleteBotRow = db.prepare("DELETE FROM bots WHERE id = ?");
   const updateBotEngine = db.prepare("UPDATE bots SET engine = ? WHERE id = ?");
   const insertThread = db.prepare(
     "INSERT INTO threads (id, bot_id, engine, cwd) VALUES (?, ?, ?, ?)",
@@ -301,6 +316,26 @@ function store(db: DatabaseSync): ThreadStore {
       requireBot(id);
       updateBotName.run(required(name.trim(), "A bot needs a name."), id);
       return requireBot(id);
+    },
+
+    deleteBot(id) {
+      requireBot(id);
+      // One transaction, so a failure cannot leave a conversation without its bot.
+      db.exec("BEGIN");
+      try {
+        deleteBotReceipts.run(id);
+        deleteBotUpdates.run(id);
+        deleteBotSchedules.run(id);
+        deleteBotThreads.run(id);
+        const result = deleteBotRow.run(id);
+        if (!changed(result.changes)) {
+          throw new Error(`Unknown bot ${id}.`);
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
     },
 
     setBotEngine(id, engine) {

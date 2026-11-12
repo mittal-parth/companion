@@ -184,7 +184,7 @@ function background(page: Page): Promise<string> {
   return page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 }
 
-test("a second bot has its own conversation and a rename sticks", async ({
+test("a sidebar row renames in place and delete opens the next bot", async ({
   page,
 }) => {
   await page.goto("/");
@@ -192,50 +192,133 @@ test("a second bot has its own conversation and a rename sticks", async ({
   await page.getByRole("button", { name: "New bot" }).click();
   await page.getByRole("textbox", { name: "Name" }).fill("Ada");
   await page.getByRole("button", { name: "Create" }).click();
-  await expect(page.getByRole("button", { name: "Rename Ada" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Ada" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Rename/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Theme:/ })).toBeVisible();
   await expect(page.getByText("Keep going")).toHaveCount(0);
   await expect(page.getByText("What should I help with?")).toBeVisible();
 
-  await page.getByRole("button", { name: "Companion", exact: true }).click();
-  await expect(page.getByText("Keep going")).toBeVisible();
+  await page.getByRole("button", { name: "Ada", exact: true }).click({
+    button: "right",
+  });
+  await page.getByRole("menuitem", { name: "Edit" }).click();
+  const draft = page.getByRole("textbox", { name: "Bot name" });
+  await draft.fill("Draft");
+  await draft.press("Escape");
   await expect(
-    page.getByRole("button", { name: "Rename Companion" }),
+    page.getByRole("button", { name: "Ada", exact: true }),
   ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Ada" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Bot name" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Ada", exact: true }).click();
-  await page.getByRole("button", { name: "Rename Ada" }).click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /^Theme:/ })).toBeVisible();
-  const name = page.getByRole("textbox", { name: "Bot name" });
-  await name.fill("Draft");
-  await name.press("Escape");
-  await expect(page.getByRole("button", { name: "Rename Ada" })).toBeVisible();
-
-  await page.getByRole("button", { name: "Rename Ada" }).click();
+  await page.getByRole("button", { name: "Ada", exact: true }).click({
+    button: "right",
+  });
+  await page.getByRole("menuitem", { name: "Edit" }).click();
   await page.getByRole("textbox", { name: "Bot name" }).fill("Blurred");
   await page.getByText("What should I help with?").click();
   await expect(
-    page.getByRole("button", { name: "Rename Blurred" }),
+    page.getByRole("button", { name: "Blurred", exact: true }),
   ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Blurred" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Rename Blurred" }).click();
+  await page.getByRole("button", { name: "Blurred", exact: true }).click({
+    button: "right",
+  });
+  await page.getByRole("menuitem", { name: "Edit" }).click();
   await page.getByRole("textbox", { name: "Bot name" }).fill("Nightly");
   await page.getByRole("textbox", { name: "Bot name" }).press("Enter");
   await expect(
     page.getByRole("button", { name: "Nightly", exact: true }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Rename Nightly" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Nightly" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Companion", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Companion" })).toBeVisible();
+  await expect(page.getByText("Keep going")).toBeVisible();
 
   await page.reload();
-  await expect(
-    page.getByRole("button", { name: "Rename Companion" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Companion" })).toBeVisible();
   await expect(page.getByText("Keep going")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Nightly", exact: true }),
   ).toBeVisible();
+
+  await page.getByRole("button", { name: "New bot" }).click();
+  await page.getByRole("textbox", { name: "Name" }).fill("Bea");
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByRole("heading", { name: "Bea" })).toBeVisible();
+  await page.getByRole("button", { name: "Companion", exact: true }).click();
+  await page.getByRole("button", { name: "Bea", exact: true }).click({
+    button: "right",
+  });
+  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("heading", { name: "Companion" })).toBeVisible();
+  await expect(page.getByText("Keep going")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Bea", exact: true }),
+  ).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Companion", exact: true }).click({
+    button: "right",
+  });
+  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Delete Companion?" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByText("Keep going")).toBeVisible();
+
+  await page.getByRole("button", { name: "Companion", exact: true }).click({
+    button: "right",
+  });
+  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("heading", { name: "Nightly" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Companion", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByText("Keep going")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Create a bot" })).toHaveCount(
+    0,
+  );
+
+  await page.getByRole("button", { name: "New bot" }).click();
+  await page.getByRole("textbox", { name: "Name" }).fill("Bea");
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByRole("heading", { name: "Bea" })).toBeVisible();
+  await page.getByRole("button", { name: "Bea", exact: true }).click({
+    button: "right",
+  });
+  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("heading", { name: "Nightly" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Create a bot" })).toHaveCount(
+    0,
+  );
+
+  await page.getByRole("button", { name: "Nightly", exact: true }).click({
+    button: "right",
+  });
+  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "Delete" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Create a bot" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Message")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Theme:/ })).toBeVisible();
+  await expect(page.getByText("No bots yet")).toBeVisible();
+
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Create a bot" }),
+  ).toBeVisible();
+  await page.getByRole("textbox", { name: "Name" }).fill("Echo");
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByRole("heading", { name: "Echo" })).toBeVisible();
+  await expect(page.getByText("What should I help with?")).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Theme:/ })).toBeVisible();
 });
 
 function release(): void {

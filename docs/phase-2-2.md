@@ -10,7 +10,7 @@ OpenCode loads a global `AGENTS.md` from the daemon's config directory into ever
 
 Grok Bot and OpenMausBot do the same split. Each bot has its own instructions and memory, and the bots share one computer, including its files and logins. Separate folders are not a sandbox. A bot that can edit files can edit another bot's folder if it tries. The plan's `/shared` directory is the place for rules and references every bot should see, the way Grok's shared brain is a folder on the shared computer rather than a shared memory. This task does not create it. Nothing here needs a file that belongs to every bot.
 
-A bot's name can be changed with `PATCH /bots/:id`. There is no avatar yet (task 3.3), and no route that deletes a bot.
+A bot's name can be changed with `PATCH /bots/:id`. `DELETE /bots/:id` removes the bot, its conversation, its folder, and its schedules. A turn that is still running is refused. There is no avatar yet (task 3.3).
 
 The scripted tests cover two folders, the opening prompt, a daemon that does not write the two files, and two turns in flight. The live test starts OpenCode twice at once, checks that each bot wrote only its own code word into `AGENTS.md` and `MEMORY.md`, restarts the daemon, and asks both bots to read their files. It reads `MEMORY.md` again after that reply.
 

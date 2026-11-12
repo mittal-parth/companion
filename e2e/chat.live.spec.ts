@@ -44,7 +44,7 @@ test("a file read shows up as a tool card", async ({ page }) => {
   await expect(reply.getByText("Completed")).toBeVisible();
 });
 
-/** The bot the page created when the server started. */
+/** The bot the test server created when it started. */
 async function defaultBot(): Promise<{ directory: string }> {
   const url = readFileSync(daemonUrlFile, "utf8").trim();
   const bots = (await (await fetch(`${url}/bots`)).json()) as Array<{
