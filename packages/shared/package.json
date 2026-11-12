@@ -5,7 +5,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./avatar": "./src/avatar.ts",
-    "./protocol": "./src/protocol.ts"
+    "./protocol": "./src/protocol.ts",
+    "./schedule": "./src/schedule.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.4.0",

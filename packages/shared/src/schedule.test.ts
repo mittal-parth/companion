@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import {
+  describeSchedule,
   nextRun,
   nextRuns,
   validateSchedule,
@@ -461,4 +462,94 @@ test("a cron runs as often as croner allows, down to one minute", () => {
 test("nextRuns returns nothing when asked for no occurrences", () => {
   const schedule = accepted({ ...text, kind: "once", at: 10 });
   expect(nextRuns(schedule, 0, 0)).toEqual([]);
+});
+
+test("a schedule is described in words", () => {
+  expect(
+    describeSchedule(
+      accepted({
+        ...text,
+        kind: "cron",
+        expression: "0 8 * * *",
+        timezone: "UTC",
+      }),
+    ),
+  ).toBe("Every day at 8:00 AM");
+  expect(
+    describeSchedule(
+      accepted({
+        ...text,
+        kind: "cron",
+        expression: "0 18 * * 1-5",
+        timezone: "UTC",
+      }),
+    ),
+  ).toBe("Weekdays at 6:00 PM");
+  expect(
+    describeSchedule(
+      accepted({
+        ...text,
+        kind: "cron",
+        expression: "30 9 * * MON",
+        timezone: "UTC",
+      }),
+    ),
+  ).toBe("Mondays at 9:30 AM");
+  expect(
+    describeSchedule(
+      accepted({
+        ...text,
+        kind: "cron",
+        expression: "0 0 * * 0,6",
+        timezone: "UTC",
+      }),
+    ),
+  ).toBe("Weekends at 12:00 AM");
+  expect(
+    describeSchedule(
+      accepted({
+        ...text,
+        kind: "cron",
+        expression: "*/15 * * * *",
+        timezone: "UTC",
+      }),
+    ),
+  ).toBe("Every 15 minutes");
+  expect(
+    describeSchedule(
+      accepted({
+        ...text,
+        kind: "cron",
+        expression: "0 9 1 * *",
+        timezone: "UTC",
+      }),
+    ),
+  ).toBe("On a custom schedule");
+  expect(
+    describeSchedule(
+      accepted({
+        ...text,
+        kind: "interval",
+        everyMinutes: 30,
+        anchorAt: at("2026-11-09T09:00:00.000Z"),
+        timezone: "UTC",
+        weekdays: [1, 2, 3, 4, 5],
+        window: { start: "09:00", end: "17:00" },
+      }),
+    ),
+  ).toBe("Every 30 minutes, on weekdays, from 9:00 AM to 5:00 PM");
+  expect(
+    describeSchedule(
+      accepted({
+        ...text,
+        kind: "interval",
+        everyMinutes: 120,
+        anchorAt: at("2026-11-09T09:00:00.000Z"),
+        timezone: "UTC",
+      }),
+    ),
+  ).toBe("Every 2 hours");
+  expect(describeSchedule(accepted({ ...text, kind: "once", at: 10 }))).toBe(
+    "Once",
+  );
 });

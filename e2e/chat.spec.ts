@@ -389,6 +389,148 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
   await expect(inChat(page, "What should I help with?")).toBeVisible();
 });
 
+test("the schedules column lists the open bot and can pause a schedule", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const heading = page.getByRole("heading", { name: "Echo" });
+  await expect(heading).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Schedules" })).toHaveCount(0);
+  await expect(heading.locator("[data-shape='sprout']")).toHaveAttribute(
+    "data-color",
+    "#1fbf68",
+  );
+
+  const header = page.locator("header").filter({
+    has: page.getByRole("button", { name: /^Theme:/ }),
+  });
+  const headerBox = await header.boundingBox();
+  const headingBox = await heading.boundingBox();
+  expect(headerBox).toBeTruthy();
+  expect(headingBox).toBeTruthy();
+  if (headerBox !== null && headingBox !== null) {
+    const headerCenter = headerBox.x + headerBox.width / 2;
+    const headingCenter = headingBox.x + headingBox.width / 2;
+    expect(Math.abs(headingCenter - headerCenter)).toBeLessThan(24);
+  }
+
+  await seedEchoSchedules();
+  await page.getByRole("button", { name: "Schedules for Echo" }).click();
+  const panel = page.getByRole("complementary", { name: "Schedules" });
+  await expect(panel.getByRole("heading", { name: "Schedules" })).toBeVisible();
+  await expect(panel.locator("[data-shape='sprout']")).toHaveAttribute(
+    "data-color",
+    "#1fbf68",
+  );
+  await expect(panel.getByText("Echo", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Morning briefing")).toBeVisible();
+  await expect(panel.getByText("Every day at 8:00 AM")).toBeVisible();
+  await expect(panel.getByText("Inbox cleanup")).toBeVisible();
+  await expect(panel.getByText("Weekdays at 6:00 PM")).toBeVisible();
+  await expect(panel.getByText("Next run").first()).toBeVisible();
+  await expect(panel.getByText("Last receipt None").first()).toBeVisible();
+  await expect(panel.getByRole("textbox")).toHaveCount(0);
+  await expect(panel.getByText("Routines")).toHaveCount(0);
+  await expect(page.getByLabel("Message")).toBeVisible();
+
+  const morning = panel
+    .getByRole("listitem")
+    .filter({ hasText: "Morning briefing" });
+  await morning
+    .getByRole("switch", { name: "Disable Morning briefing" })
+    .click();
+  await expect(morning.getByText("Paused")).toBeVisible();
+  await expect(morning.getByText("Next run None")).toBeVisible();
+  await expect(morning.getByRole("switch")).not.toBeChecked();
+  expect(await echoSchedule("Morning briefing")).toMatchObject({
+    paused: true,
+    nextRunAt: null,
+  });
+
+  await morning
+    .getByRole("switch", { name: "Enable Morning briefing" })
+    .click();
+  await expect(morning.getByText("Every day at 8:00 AM")).toBeVisible();
+  await expect(morning.getByText("Next run None")).toHaveCount(0);
+  await expect(morning.getByRole("switch")).toBeChecked();
+  const enabled = await echoSchedule("Morning briefing");
+  expect(enabled.paused).toBe(false);
+  expect(enabled.nextRunAt).toEqual(expect.any(String));
+
+  await panel.getByRole("button", { name: "Close schedules" }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByLabel("Message")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Echo", exact: true }),
+  ).toBeVisible();
+});
+
+/** Two future schedules on Echo, created the way the bot's command would. */
+async function seedEchoSchedules(): Promise<void> {
+  const { url, token } = await echoAccess();
+  const create = async (body: Record<string, unknown>) => {
+    const response = await fetch(`${url}/agent/schedules`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    expect(response.ok).toBe(true);
+  };
+  await create({
+    kind: "cron",
+    prompt: "Morning briefing",
+    expression: "0 8 * * *",
+    timezone: "UTC",
+  });
+  await create({
+    kind: "cron",
+    prompt: "Inbox cleanup",
+    expression: "0 18 * * 1-5",
+    timezone: "UTC",
+  });
+}
+
+async function echoSchedule(prompt: string): Promise<{
+  paused: boolean;
+  nextRunAt: string | null;
+}> {
+  const { url, token } = await echoAccess();
+  const response = await fetch(`${url}/agent/schedules`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  expect(response.ok).toBe(true);
+  const rows = (await response.json()) as Array<{
+    prompt: string;
+    paused: boolean;
+    nextRunAt: string | null;
+  }>;
+  const row = rows.find((item) => item.prompt === prompt);
+  expect(row).toBeTruthy();
+  if (row === undefined) throw new Error(`Missing schedule ${prompt}.`);
+  return row;
+}
+
+/** The daemon address and Echo's schedule token. */
+async function echoAccess(): Promise<{ url: string; token: string }> {
+  const url = readFileSync(daemonUrlFile, "utf8").trim();
+  const response = await fetch(`${url}/bots`);
+  expect(response.ok).toBe(true);
+  const bots = (await response.json()) as Array<{
+    name: string;
+    directory: string;
+  }>;
+  const echo = bots.find((bot) => bot.name === "Echo");
+  expect(echo).toBeTruthy();
+  if (echo === undefined) throw new Error("Echo is missing.");
+  const access = JSON.parse(
+    readFileSync(join(echo.directory, ".companion", "schedule.json"), "utf8"),
+  ) as { token: string };
+  return { url, token: access.token };
+}
+
 function release(): void {
   writeFileSync(gateFile, "go");
 }

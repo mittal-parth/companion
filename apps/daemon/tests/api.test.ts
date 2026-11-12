@@ -704,6 +704,83 @@ test("two bots can take a turn at the same time", async () => {
   });
 });
 
+test("a bot's schedules can be listed, paused, and resumed", async () => {
+  const engine: Engine = {
+    async prompt() {
+      return "end_turn";
+    },
+    async close() {},
+  };
+  await withDaemon(engine, async (daemon) => {
+    const ada = await createBot(daemon, "Ada");
+    const bea = await createBot(daemon, "Bea");
+    const morning = daemon.createSchedule({
+      botId: ada.id,
+      kind: "cron",
+      prompt: "Morning briefing",
+      expression: "0 8 * * *",
+      timezone: "UTC",
+    });
+    const other = daemon.createSchedule({
+      botId: bea.id,
+      kind: "once",
+      prompt: "Someone else",
+      at: Date.now() + 3_600_000,
+    });
+
+    const listed = await fetch(`${daemon.url}/bots/${ada.id}/schedules`);
+    expect(listed.status).toBe(200);
+    const rows = (await listed.json()) as Array<{
+      id: string;
+      prompt: string;
+      paused: boolean;
+      nextRunAt: string | null;
+      lastRunAt: string | null;
+    }>;
+    expect(rows.map((row) => row.prompt)).toEqual(["Morning briefing"]);
+    expect(rows[0]?.paused).toBe(false);
+    expect(rows[0]?.nextRunAt).toEqual(expect.any(String));
+    expect(rows[0]?.lastRunAt).toBeNull();
+
+    const created = await fetch(`${daemon.url}/bots/${ada.id}/schedules`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(created.status).toBe(405);
+
+    const paused = await fetch(
+      `${daemon.url}/bots/${ada.id}/schedules/${morning.id}/pause`,
+      { method: "POST" },
+    );
+    expect(paused.status).toBe(200);
+    expect(await paused.json()).toMatchObject({
+      paused: true,
+      nextRunAt: null,
+    });
+
+    const resumed = await fetch(
+      `${daemon.url}/bots/${ada.id}/schedules/${morning.id}/resume`,
+      { method: "POST" },
+    );
+    expect(resumed.status).toBe(200);
+    const resumedBody = (await resumed.json()) as {
+      paused: boolean;
+      nextRunAt: string | null;
+    };
+    expect(resumedBody.paused).toBe(false);
+    expect(resumedBody.nextRunAt).toEqual(expect.any(String));
+
+    const foreign = await fetch(
+      `${daemon.url}/bots/${ada.id}/schedules/${other.id}/pause`,
+      { method: "POST" },
+    );
+    expect(foreign.status).toBe(404);
+    const missing = await fetch(`${daemon.url}/bots/missing/schedules`);
+    expect(missing.status).toBe(404);
+  });
+});
+
 test("a bot gets a schedule token before its opening turn", async () => {
   const seen: string[] = [];
   const engine: Engine = {
