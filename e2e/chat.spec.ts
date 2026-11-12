@@ -15,7 +15,7 @@ const pixel =
 
 test.describe.configure({ mode: "serial" });
 
-test("a message streams markdown and a tool call", async ({ page }) => {
+test("a message streams markdown and hides the tool call", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/");
   await expect(inChat(page, "What should I help with?")).toBeVisible();
@@ -37,8 +37,8 @@ test("a message streams markdown and a tool call", async ({ page }) => {
     page.locator("[data-streamdown='strong']", { hasText: "All finished." }),
   ).toBeVisible();
   await expect(preview(page, "Companion")).toContainText("All finished.");
-  await expect(page.getByText("read note")).toBeVisible();
-  await expect(page.getByText("marigold")).toBeVisible();
+  await expect(page.getByText("read note")).toHaveCount(0);
+  await expect(page.getByText("marigold")).toHaveCount(0);
   await expect(page.locator("[data-turn-status]")).toHaveCount(0);
 });
 

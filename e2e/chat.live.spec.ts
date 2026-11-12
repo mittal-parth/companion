@@ -28,7 +28,9 @@ test("a message streams a reply", async ({ page }) => {
   });
 });
 
-test("a file read shows up as a tool card", async ({ page }) => {
+test("a file read's word is in the reply, not a tool card", async ({
+  page,
+}) => {
   const word = `marigold-${randomUUID().slice(0, 8)}`;
   const bot = await defaultBot();
   writeFileSync(join(bot.directory, "note.txt"), `${word}\n`, "utf8");
@@ -41,7 +43,7 @@ test("a file read shows up as a tool card", async ({ page }) => {
   await page.getByRole("button", { name: "Submit" }).click();
   const reply = page.locator(".is-assistant").last();
   await expect(reply.getByText(word)).toBeVisible({ timeout: 240_000 });
-  await expect(reply.getByText("Completed")).toBeVisible();
+  await expect(reply.getByText("Completed")).toHaveCount(0);
 });
 
 /** The bot the test server created when it started. */

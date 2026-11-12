@@ -13,7 +13,7 @@ The first command builds the web app, starts it with a scripted daemon, and runs
 
 ## How a message reaches the page
 
-The person types in the AI Elements prompt. `useChat` posts the message to the Next route. The route turns image file parts into the `{ mimeType, data }` images the daemon already stores, then calls `POST /bots/:id/messages`. The daemon keeps the person's text and images as `user_message_chunk` updates before the turn starts, so a reload can show them. It streams ACP `session/update` notifications, then `done` or `error`. The converter turns those into text, reasoning, dynamic tool parts, and a finish. AI Elements renders them. Streamdown renders the markdown while it is still arriving.
+The person types in the AI Elements prompt. `useChat` posts the message to the Next route. The route turns image file parts into the `{ mimeType, data }` images the daemon already stores, then calls `POST /bots/:id/messages`. The daemon keeps the person's text and images as `user_message_chunk` updates before the turn starts, so a reload can show them. It streams ACP `session/update` notifications, then `done` or `error`. The converter turns those into text, reasoning, dynamic tool parts, and a finish. The chat draws the text and the thoughts. It does not draw a tool call. Streamdown renders the markdown while it is still arriving.
 
 A second message is blocked in the composer while a turn is running. The daemon would answer `409`.
 
@@ -28,7 +28,7 @@ flowchart LR
   Daemon --> OpenCode["OpenCode over ACP"]
 ```
 
-`apps/web/src/lib/converter.ts` is the converter. `transcriptToMessages` reads a stored transcript: the person's chunks, including images, become a user message, and the reply that follows becomes the assistant message. Thought chunks are reasoning. Tool calls are dynamic tool parts, with a failed call shown as an error. Notices are text. Plan, usage, and the other session bookkeeping stay out of the chat. The switch over update kinds is exhaustive.
+`apps/web/src/lib/converter.ts` is the converter. `transcriptToMessages` reads a stored transcript: the person's chunks, including images, become a user message, and the reply that follows becomes the assistant message. Thought chunks are reasoning. Tool calls stay on the message as dynamic tool parts, including a failed call stored as an error, and the thread does not draw them. Notices are text. Plan, usage, and the other session bookkeeping stay out of the chat. The switch over update kinds is exhaustive.
 
 `createReplyStream` does the same for one live turn. That stream is only the reply. The person's message is already on the page.
 
@@ -57,4 +57,4 @@ sequenceDiagram
 
 ## What the browser test covers
 
-`e2e/chat.spec.ts` starts the daemon with an engine that answers in two beats. The first beat is visible immediately. The rest waits until the test releases it. That is what makes a reload land in the middle of a turn. The cases send a message and see streamed markdown and a tool call, attach an image and check the daemon stored it, and reload before the turn finishes and then see it finish. `e2e/chat.live.spec.ts` runs the same app against OpenCode: the opening greeting is on the page, a reply streams, and a file read shows up as a tool card.
+`e2e/chat.spec.ts` starts the daemon with an engine that answers in two beats. The first beat is visible immediately. The rest waits until the test releases it. That is what makes a reload land in the middle of a turn. The cases send a message and see streamed markdown, with the tool call kept out of the thread, attach an image and check the daemon stored it, and reload before the turn finishes and then see it finish. `e2e/chat.live.spec.ts` runs the same app against OpenCode: the opening greeting is on the page, a reply streams, and a file read's word is in that reply rather than a tool card.

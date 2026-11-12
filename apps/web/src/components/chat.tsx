@@ -38,13 +38,6 @@ import {
 } from "@/components/ai-elements/reasoning";
 import { lastChatLine } from "@/lib/converter";
 import {
-  Tool,
-  ToolContent,
-  ToolHeader,
-  ToolInput,
-  ToolOutput,
-} from "@/components/ai-elements/tool";
-import {
   nextLook,
   turnLookIntervalMs,
   turnStatusIntervalMs,
@@ -194,8 +187,7 @@ export function Chat({
 /**
  * The pieces of one turn.
  * Words and pictures share a bubble. A thought stays beside that bubble.
- * Tool calls wait until the turn is finished, so a reply in progress shows
- * the words that arrived and the status row, not every call.
+ * A tool call is not shown: the thread is the text OpenCode sent, not each update.
  */
 function MessageParts({
   message,
@@ -247,6 +239,7 @@ function MessageParts({
       );
       return;
     }
+    if (part.type === "dynamic-tool") return;
     flushBubble();
     if (part.type === "reasoning") {
       rendered.push(
@@ -259,28 +252,6 @@ function MessageParts({
         </Reasoning>,
       );
       return;
-    }
-    if (part.type === "dynamic-tool") {
-      if (streaming) return;
-      rendered.push(
-        <Tool defaultOpen key={part.toolCallId}>
-          <ToolHeader
-            state={part.state}
-            title={part.title}
-            toolName={part.toolName}
-            type="dynamic-tool"
-          />
-          <ToolContent>
-            <ToolInput input={part.input} />
-            <ToolOutput
-              errorText={part.errorText}
-              output={
-                part.state === "output-available" ? part.output : undefined
-              }
-            />
-          </ToolContent>
-        </Tool>,
-      );
     }
   });
   flushBubble();

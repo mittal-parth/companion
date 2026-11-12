@@ -104,8 +104,8 @@ function heldEngine() {
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: "Working on it.\n\n" },
       });
-      // The tool starts before the gate so a test can see the page keep it
-      // out of the thread while the reply text is already on screen.
+      // The tool starts before the gate so a test can see the page leave it
+      // out of the thread, during the reply and after it finishes.
       await pace();
       onUpdate({
         sessionUpdate: "tool_call",
