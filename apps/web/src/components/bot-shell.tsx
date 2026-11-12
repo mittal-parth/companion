@@ -2,7 +2,9 @@
 
 /**
  * The sidebar of this computer's bots, and the conversation that is open.
- * Creating a bot waits for its greeting. A refresh opens the first bot again.
+ * Creating a bot waits for its greeting. The chat header name, beside the
+ * theme control, is edited in place: click it, then leave the field or press
+ * Enter. Escape keeps the previous name. A refresh opens the first bot again.
  */
 import { Chat } from "@/components/chat";
 import { Button } from "@/components/ui/button";
@@ -51,7 +53,9 @@ export function BotShell({
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(initialChat.name);
   const renameLock = useRef(false);
-  const skipRename = useRef(false);
+  // Bumped when an edit starts or is dropped, so a late blur cannot save it.
+  const renameGeneration = useRef(0);
+  const renameSession = renameGeneration.current;
 
   return (
     <SidebarProvider className="h-svh">
@@ -97,31 +101,43 @@ export function BotShell({
           <div className="min-w-0 flex-1">
             {renaming ? (
               <form
+                className="inline-grid max-w-full min-w-0"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void saveRename();
+                  void saveRename(renameSession);
                 }}
               >
-                <Input
+                <span
+                  aria-hidden
+                  className="invisible col-start-1 row-start-1 px-2 text-sm leading-5 font-medium whitespace-pre"
+                >
+                  {renameValue || " "}
+                </span>
+                <input
                   aria-label="Bot name"
+                  autoComplete="off"
                   autoFocus
-                  className="h-8 max-w-xs"
-                  onBlur={() => void saveRename()}
+                  className="col-start-1 row-start-1 w-px min-w-full border-0 bg-transparent px-2 py-0 text-sm leading-5 font-medium shadow-none outline-none"
+                  onBlur={() => void saveRename(renameSession)}
                   onChange={(event) => setRenameValue(event.target.value)}
+                  onFocus={(event) => event.currentTarget.select()}
                   onKeyDown={(event) => {
                     if (event.key !== "Escape") return;
                     event.preventDefault();
-                    skipRename.current = true;
+                    renameGeneration.current += 1;
+                    setRenameValue(chat.name);
                     setRenaming(false);
                   }}
+                  spellCheck={false}
                   value={renameValue}
                 />
               </form>
             ) : (
               <button
                 aria-label={`Rename ${chat.name}`}
-                className="truncate px-2 text-sm font-medium"
+                className="max-w-full truncate px-2 text-left text-sm leading-5 font-medium"
                 onClick={() => {
+                  renameGeneration.current += 1;
                   setRenameValue(chat.name);
                   setShellError(undefined);
                   setRenaming(true);
@@ -261,16 +277,12 @@ export function BotShell({
     }
   }
 
-  async function saveRename() {
-    if (skipRename.current) {
-      skipRename.current = false;
-      return;
-    }
-    if (renameLock.current) return;
+  async function saveRename(generation: number) {
+    if (generation !== renameGeneration.current || renameLock.current) return;
     renameLock.current = true;
     const next = renameValue.trim();
     if (next === "" || next === chat.name) {
-      skipRename.current = true;
+      renameGeneration.current += 1;
       setRenaming(false);
       renameLock.current = false;
       return;
@@ -282,6 +294,7 @@ export function BotShell({
         body: JSON.stringify({ name: next }),
       });
       const body: unknown = await response.json().catch(() => undefined);
+      if (generation !== renameGeneration.current) return;
       if (!response.ok || !isSummary(body)) {
         throw new Error(messageFrom(body, "The bot could not be renamed."));
       }
@@ -293,10 +306,11 @@ export function BotShell({
       setChat((current) =>
         current.id === body.id ? { ...current, name: body.name } : current,
       );
-      skipRename.current = true;
+      renameGeneration.current += 1;
       setRenaming(false);
       setShellError(undefined);
     } catch (error) {
+      if (generation !== renameGeneration.current) return;
       setShellError(
         error instanceof Error
           ? error.message

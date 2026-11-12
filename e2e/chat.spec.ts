@@ -155,8 +155,23 @@ test("a second bot has its own conversation and a rename sticks", async ({
 
   await page.getByRole("button", { name: "Ada", exact: true }).click();
   await page.getByRole("button", { name: "Rename Ada" }).click();
-  await page.getByLabel("Bot name").fill("Nightly");
-  await page.getByLabel("Bot name").press("Enter");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Theme:/ })).toBeVisible();
+  const name = page.getByRole("textbox", { name: "Bot name" });
+  await name.fill("Draft");
+  await name.press("Escape");
+  await expect(page.getByRole("button", { name: "Rename Ada" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Rename Ada" }).click();
+  await page.getByRole("textbox", { name: "Bot name" }).fill("Blurred");
+  await page.getByText("What should I help with?").click();
+  await expect(
+    page.getByRole("button", { name: "Rename Blurred" }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Rename Blurred" }).click();
+  await page.getByRole("textbox", { name: "Bot name" }).fill("Nightly");
+  await page.getByRole("textbox", { name: "Bot name" }).press("Enter");
   await expect(
     page.getByRole("button", { name: "Nightly", exact: true }),
   ).toBeVisible();
