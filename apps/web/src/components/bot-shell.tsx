@@ -10,8 +10,11 @@
  * right.
  * Delete asks first, then removes the bot and its conversation. The next bot
  * opens, or the one above when the deleted bot was last in the list. The last
- * bot leaves a screen that asks for a picture and a name. A refresh opens the
- * first bot again, and an empty computer stays on that screen.
+ * bot leaves a screen that asks for a picture and a name. The open bot's
+ * address is /bots/<id>, using the id the daemon already stored. Choosing,
+ * creating, or deleting the open bot updates that address. A refresh of it
+ * opens the same bot. A refresh of / opens the first bot, and an empty
+ * computer stays on that screen.
  */
 import { AvatarPicker, BotAvatar } from "@/components/bot-avatar";
 import { Chat } from "@/components/chat";
@@ -54,7 +57,7 @@ import {
   type BotAvatar as ChosenAvatar,
 } from "@companion/shared/avatar";
 import { PlusIcon } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export function BotShell({
   bots: initialBots,
@@ -86,6 +89,20 @@ export function BotShell({
   const [schedulesOpen, setSchedulesOpen] = useState(false);
   const createNameRef = useRef<HTMLInputElement>(null);
   const renameLock = useRef(false);
+  const firstId = bots[0]?.id;
+  // Back and forward land on an address. Reload when it is a different bot
+  // from the one on screen, so the daemon's id and the page agree.
+  useEffect(() => {
+    const onPopState = () => {
+      const addressed = botIdFromAddress(window.location.pathname);
+      const open = chat?.id ?? null;
+      if (addressed === open) return;
+      if (addressed === null && open !== null && firstId === open) return;
+      window.location.reload();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [chat?.id, firstId]);
   const rememberPreview = useCallback((botId: string, preview: string) => {
     setBots((list) => {
       const current = list.find((bot) => bot.id === botId);
@@ -500,8 +517,15 @@ export function BotShell({
     setShellError(undefined);
   }
 
-  async function openBot(id: string): Promise<boolean> {
-    if (switching || id === chat?.id) return id === chat?.id;
+  async function openBot(
+    id: string,
+    history: "push" | "replace" = "push",
+  ): Promise<boolean> {
+    if (id === chat?.id) {
+      rememberBot(id, history);
+      return true;
+    }
+    if (switching) return false;
     setSwitching(true);
     setShellError(undefined);
     try {
@@ -517,6 +541,7 @@ export function BotShell({
             : bot,
         ),
       );
+      rememberBot(id, history);
       setChat(body);
       return true;
     } catch (error) {
@@ -548,6 +573,7 @@ export function BotShell({
       if (!response.ok || !isLoadedBot(body)) {
         throw new Error(messageFrom(body, "The bot could not be created."));
       }
+      rememberBot(body.id, "push");
       setBots((list) => [
         ...list,
         {
@@ -647,13 +673,15 @@ export function BotShell({
       setPendingDelete(undefined);
       if (!wasOpen) return;
       if (next !== undefined && next.id !== target.id) {
-        const opened = await openBot(next.id);
+        rememberBot(next.id, "replace");
+        const opened = await openBot(next.id, "replace");
         if (!opened) {
           setSchedulesOpen(false);
           setChat((current) => (current?.id === target.id ? null : current));
         }
         return;
       }
+      rememberBot(null, "replace");
       setSchedulesOpen(false);
       setChat((current) => (current?.id === target.id ? null : current));
     } catch (error) {
@@ -714,6 +742,29 @@ export function BotShell({
       setSavingAvatar(false);
     }
   }
+}
+
+/**
+ * Puts the open bot in the address bar.
+ * The history entry keeps Next's own marker, so choosing a bot does not
+ * reload the page. A refresh or a later visit reads /bots/<id> and opens
+ * that bot. Home, /, is the empty address.
+ */
+function rememberBot(id: string | null, history: "push" | "replace"): void {
+  const path = id === null ? "/" : `/bots/${encodeURIComponent(id)}`;
+  if (window.location.pathname === path) return;
+  const current = window.history.state;
+  if (history === "replace") window.history.replaceState(current, "", path);
+  else window.history.pushState(current, "", path);
+}
+
+/** The bot id in /bots/<id>, or none on the home page. */
+function botIdFromAddress(pathname: string): string | null {
+  const prefix = "/bots/";
+  if (!pathname.startsWith(prefix)) return null;
+  const id = pathname.slice(prefix.length);
+  if (id === "" || id.includes("/")) return null;
+  return decodeURIComponent(id);
 }
 
 /** The name, and the latest line of that chat under it. */

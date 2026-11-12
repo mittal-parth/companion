@@ -275,6 +275,13 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
   await expect(preview(page, "Companion")).toContainText(
     "This step needs a decision.",
   );
+  await expect(page).toHaveURL(botAddress);
+  const adaUrl = page.url();
+  await page.reload();
+  await expect(page).toHaveURL(adaUrl);
+  await expect(page.getByRole("heading", { name: "Ada" })).toBeVisible();
+  await expect(inChat(page, "Keep going")).toHaveCount(0);
+  await expect(inChat(page, "What should I help with?")).toBeVisible();
 
   await page.getByRole("button", { name: "Ada", exact: true }).click({
     button: "right",
@@ -313,17 +320,44 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
     page.getByRole("button", { name: "Nightly", exact: true }),
   ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Nightly" })).toBeVisible();
+  await expect(page).toHaveURL(adaUrl);
 
   await page.getByRole("button", { name: "Companion", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Companion" })).toBeVisible();
   await expect(inChat(page, "Keep going")).toBeVisible();
+  await expect(page).toHaveURL(botAddress);
+  const companionUrl = page.url();
+  expect(companionUrl).not.toBe(adaUrl);
 
   await page.reload();
+  await expect(page).toHaveURL(companionUrl);
   await expect(page.getByRole("heading", { name: "Companion" })).toBeVisible();
   await expect(inChat(page, "Keep going")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Nightly", exact: true }),
   ).toBeVisible();
+
+  await page.goto("/");
+  await expect(page).toHaveURL((url) => url.pathname === "/");
+  await expect(page.getByRole("heading", { name: "Companion" })).toBeVisible();
+  await expect(inChat(page, "Keep going")).toBeVisible();
+
+  await page.goto(adaUrl);
+  await expect(page.getByRole("heading", { name: "Nightly" })).toBeVisible();
+  await expect(inChat(page, "Keep going")).toHaveCount(0);
+  await page.reload();
+  await expect(page).toHaveURL(adaUrl);
+  await expect(page.getByRole("heading", { name: "Nightly" })).toBeVisible();
+
+  await page.goto("/bots/missing-bot");
+  await expect(
+    page.getByText("That bot is not on this computer."),
+  ).toBeVisible();
+
+  await page.goto(companionUrl);
+  await expect(page.getByRole("heading", { name: "Companion" })).toBeVisible();
+  await expect(inChat(page, "Keep going")).toBeVisible();
+  await expect(page).toHaveURL(companionUrl);
 
   await page.getByRole("button", { name: "New bot" }).click();
   await page.getByRole("radio", { name: "Orange" }).click();
@@ -400,6 +434,7 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
   await expect(page.getByText("No chats yet")).toBeVisible();
   await expect(page.getByText("Night Shift")).toHaveCount(0);
   await expect(page.getByText("Inbox Triage")).toHaveCount(0);
+  await expect(page).toHaveURL((url) => url.pathname === "/");
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "New Bot" })).toBeVisible();
@@ -442,8 +477,11 @@ test("a sidebar row renames in place and delete opens the next bot", async ({
       .locator("[data-shape='sprout']"),
   ).toHaveAttribute("data-color", "#1fbf68");
   await expect(inChat(page, "What should I help with?")).toBeVisible();
+  await expect(page).toHaveURL(botAddress);
+  const echoUrl = page.url();
 
   await page.reload();
+  await expect(page).toHaveURL(echoUrl);
   await expect(
     page
       .getByRole("heading", { name: "Echo" })
@@ -601,6 +639,13 @@ async function echoAccess(): Promise<{ url: string; token: string }> {
 
 function release(): void {
   writeFileSync(gateFile, "go");
+}
+
+/** /bots/<id>, the address of one bot. The id is a daemon uuid. */
+function botAddress(url: URL): boolean {
+  return /^\/bots\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    url.pathname,
+  );
 }
 
 /** The latest chat line under one bot's name. */
