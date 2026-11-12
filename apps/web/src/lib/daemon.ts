@@ -57,7 +57,7 @@ export type LoadedBot = {
 
 /**
  * The first bot, when this computer has one.
- * Opening the page uses this bot. It does not remember which one was open last.
+ * The home page, /, uses this bot. /bots/<id> opens a chosen bot instead.
  * An empty computer stays empty, so the page can ask for a name.
  */
 export async function openFirstBot(): Promise<{
@@ -68,6 +68,23 @@ export async function openFirstBot(): Promise<{
   const first = loaded[0];
   if (first === undefined) return { bots: [], chat: null };
   return { bots: loaded.map(summarize), chat: first };
+}
+
+/**
+ * The bot named in the page address, with the same sidebar as the home page.
+ * The id is the one the daemon already stored. A missing id is refused so
+ * the page can say that bot is not on this computer.
+ */
+export async function openBot(id: string): Promise<{
+  bots: BotSummary[];
+  chat: LoadedBot;
+}> {
+  const loaded = await loadEveryBot();
+  const chat = loaded.find((bot) => bot.id === id);
+  if (chat === undefined) {
+    throw new Error("That bot is not on this computer.");
+  }
+  return { bots: loaded.map(summarize), chat };
 }
 
 /** Every bot, oldest first, each with the line under its name. */
