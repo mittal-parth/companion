@@ -4,8 +4,13 @@
  * One bot's conversation.
  * The shell decides which bot this is. A turn that was already running is
  * resumed from the daemon, which replays the reply, so a reload does not
- * show it twice.
+ * show it twice. While a reply is still being written, a status row sits
+ * under the bot's latest message: its picture, three dots, and a rotating line.
+ * A tool call stays out of the thread. When a step needs a decision, Allow
+ * and Deny sit on that step until it is answered. Deny stops the call.
  */
+import { BotAvatar } from "@/components/bot-avatar";
+import { Button } from "@/components/ui/button";
 import {
   Conversation,
   ConversationContent,
@@ -34,16 +39,16 @@ import {
   ReasoningContent,
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
-import { Shimmer } from "@/components/ai-elements/shimmer";
+import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool";
 import { lastChatLine } from "@/lib/converter";
 import {
-  Tool,
-  ToolContent,
-  ToolHeader,
-  ToolInput,
-  ToolOutput,
-} from "@/components/ai-elements/tool";
+  nextLook,
+  turnLookIntervalMs,
+  turnStatusIntervalMs,
+  turnStatusLine,
+} from "@/lib/turn-status";
 import { useChat } from "@ai-sdk/react";
+import type { BotAvatar as ChosenAvatar } from "@companion/shared/avatar";
 import {
   imageMimeTypes,
   maxImageBytes,
@@ -59,6 +64,7 @@ const imageAccept = imageMimeTypes.join(",");
 export function Chat({
   botId,
   name,
+  avatar,
   messages: initialMessages,
   resume,
   replyFrom,
@@ -68,6 +74,7 @@ export function Chat({
 }: {
   botId: string;
   name: string;
+  avatar: ChosenAvatar;
   messages: UIMessage[];
   resume: boolean;
   replyFrom?: number;
@@ -92,13 +99,15 @@ export function Chat({
       }),
     [replyFrom],
   );
-  const { messages, sendMessage, status, error } = useChat({
-    id: botId,
-    messages: initialMessages,
-    resume,
-    transport,
-  });
+  const { messages, sendMessage, status, error, addToolApprovalResponse } =
+    useChat({
+      id: botId,
+      messages: initialMessages,
+      resume,
+      transport,
+    });
   const [formError, setFormError] = useState<string>();
+  const [deciding, setDeciding] = useState<string>();
   useEffect(() => {
     onPreview(botId, lastChatLine(messages));
   }, [botId, messages, onPreview]);
@@ -119,7 +128,11 @@ export function Chat({
             messages.map((message, index) => (
               <Message from={message.role} key={message.id}>
                 <MessageParts
+                  deciding={deciding}
                   message={message}
+                  onDecide={(toolCallId, approvalId, decision) =>
+                    void decide(toolCallId, approvalId, decision)
+                  }
                   streaming={
                     busy &&
                     message.role === "assistant" &&
@@ -129,7 +142,7 @@ export function Chat({
               </Message>
             ))
           )}
-          {busy && waiting(messages) ? <Shimmer>Replying</Shimmer> : null}
+          {busy ? <TurnStatus avatar={avatar} /> : null}
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>
@@ -179,30 +192,66 @@ export function Chat({
     }
     await sendMessage({ files: message.files, text });
   }
-}
 
-function waiting(messages: UIMessage[]): boolean {
-  const last = messages.at(-1);
-  if (last === undefined || last.role === "user") return true;
-  return !last.parts.some(
-    (part) =>
-      (part.type === "text" && part.text !== "") ||
-      part.type === "reasoning" ||
-      part.type === "dynamic-tool",
-  );
+  async function decide(
+    toolCallId: string,
+    approvalId: string,
+    decision: "allow" | "deny",
+  ) {
+    setDeciding(toolCallId);
+    setFormError(undefined);
+    try {
+      const response = await fetch(
+        `/api/chat/${encodeURIComponent(botId)}/approval`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ toolCallId, decision }),
+        },
+      );
+      if (!response.ok) {
+        const body: unknown = await response.json().catch(() => undefined);
+        const message =
+          typeof body === "object" &&
+          body !== null &&
+          "error" in body &&
+          typeof body.error === "string"
+            ? body.error
+            : "The approval could not be sent.";
+        setFormError(message);
+        return;
+      }
+      await addToolApprovalResponse({
+        id: approvalId,
+        approved: decision === "allow",
+      });
+    } finally {
+      setDeciding(undefined);
+    }
+  }
 }
 
 /**
  * The pieces of one turn.
- * Words and pictures share a bubble. A tool call or a thought stays beside
- * that bubble, so the bubble itself is only what was said.
+ * Words and pictures share a bubble. A thought stays beside that bubble.
+ * A tool call is not shown: the thread is the text OpenCode sent.
+ * The exception is a step that still needs a decision. Allow and Deny sit
+ * on that step, and they leave once it is answered. The status row is separate.
  */
 function MessageParts({
   message,
   streaming,
+  deciding,
+  onDecide,
 }: {
   message: UIMessage;
   streaming: boolean;
+  deciding?: string;
+  onDecide: (
+    toolCallId: string,
+    approvalId: string,
+    decision: "allow" | "deny",
+  ) => void;
 }) {
   const rendered: ReactNode[] = [];
   let bubble: ReactNode[] = [];
@@ -247,6 +296,46 @@ function MessageParts({
       );
       return;
     }
+    if (part.type === "dynamic-tool") {
+      if (part.state !== "approval-requested") return;
+      flushBubble();
+      rendered.push(
+        <Tool defaultOpen key={part.toolCallId}>
+          <ToolHeader
+            state={part.state}
+            title={part.title}
+            toolName={part.toolName}
+            type="dynamic-tool"
+          />
+          <ToolContent>
+            <div className="flex gap-2" data-approval={part.toolCallId}>
+              <Button
+                disabled={deciding === part.toolCallId}
+                onClick={() =>
+                  onDecide(part.toolCallId, part.approval.id, "allow")
+                }
+                size="sm"
+                type="button"
+              >
+                Allow
+              </Button>
+              <Button
+                disabled={deciding === part.toolCallId}
+                onClick={() =>
+                  onDecide(part.toolCallId, part.approval.id, "deny")
+                }
+                size="sm"
+                type="button"
+                variant="destructive"
+              >
+                Deny
+              </Button>
+            </div>
+          </ToolContent>
+        </Tool>,
+      );
+      return;
+    }
     flushBubble();
     if (part.type === "reasoning") {
       rendered.push(
@@ -260,30 +349,70 @@ function MessageParts({
       );
       return;
     }
-    if (part.type === "dynamic-tool") {
-      rendered.push(
-        <Tool defaultOpen key={part.toolCallId}>
-          <ToolHeader
-            state={part.state}
-            title={part.title}
-            toolName={part.toolName}
-            type="dynamic-tool"
-          />
-          <ToolContent>
-            <ToolInput input={part.input} />
-            <ToolOutput
-              errorText={part.errorText}
-              output={
-                part.state === "output-available" ? part.output : undefined
-              }
-            />
-          </ToolContent>
-        </Tool>,
-      );
-    }
   });
   flushBubble();
   return rendered;
+}
+
+/**
+ * Sits under the bot's latest message while that turn is still being written.
+ * The picture is this bot's avatar, glancing a little at random. The line is
+ * one of a short list, not the name of a tool. Words that arrive stay above.
+ */
+function TurnStatus({ avatar }: { avatar: ChosenAvatar }) {
+  const [lineIndex, setLineIndex] = useState(0);
+  const [look, setLook] = useState(() => nextLook());
+
+  useEffect(() => {
+    const reduce = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    const lineTimer = window.setInterval(() => {
+      setLineIndex((index) => index + 1);
+    }, turnStatusIntervalMs);
+    if (reduce) return () => window.clearInterval(lineTimer);
+    const lookTimer = window.setInterval(() => {
+      setLook((current) => nextLook(current));
+    }, turnLookIntervalMs);
+    return () => {
+      window.clearInterval(lineTimer);
+      window.clearInterval(lookTimer);
+    };
+  }, []);
+
+  const line = turnStatusLine(lineIndex);
+
+  return (
+    <div
+      aria-live="polite"
+      className="flex items-center gap-2.5 text-muted-foreground text-sm"
+      data-look={`${look.x.toFixed(2)},${look.y.toFixed(2)}`}
+      data-status-line={line}
+      data-turn-status=""
+      role="status"
+    >
+      <BotAvatar
+        avatar={avatar}
+        followPointer={false}
+        lookAt={look}
+        mood="thinking"
+        size={36}
+      />
+      <span aria-hidden="true" className="inline-flex items-end gap-1">
+        {[0, 160, 320].map((delay) => (
+          <span
+            className="turn-status-dot"
+            data-turn-dot=""
+            key={delay}
+            style={{ animationDelay: `${delay}ms` }}
+          />
+        ))}
+      </span>
+      <span className="turn-status-line" key={line}>
+        {line}
+      </span>
+    </div>
+  );
 }
 
 function Attachments() {

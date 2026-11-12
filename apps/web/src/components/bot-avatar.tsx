@@ -8,7 +8,11 @@
  */
 import { cn } from "cn";
 import { useEffect, useRef } from "react";
-import { mountAvatar, type AvatarOptions } from "open-bot-avatar/dom";
+import {
+  mountAvatar,
+  type AvatarOptions,
+  type MountedAvatar,
+} from "open-bot-avatar/dom";
 import {
   avatarColors,
   avatarDefinition,
@@ -16,25 +20,38 @@ import {
   type BotAvatar,
 } from "@companion/shared/avatar";
 
-/** The picture of one bot, for the sidebar, the header, and the picker. */
+/**
+ * The picture of one bot, for the sidebar, the header, the picker, and a reply
+ * that is still being written. A mood and a look let that reply glance around
+ * without changing the stored picture.
+ */
 export function BotAvatar({
   avatar,
   size,
   className,
+  mood,
+  followPointer = true,
+  lookAt,
 }: {
   avatar: BotAvatar;
   size: number;
   className?: string;
+  mood?: AvatarOptions["mood"];
+  followPointer?: boolean;
+  lookAt?: { x: number; y: number } | null;
 }) {
   return (
     <LiveAvatar
       className={className}
       color={avatar.color}
       data-color={avatar.color}
+      data-mood={mood}
       data-shape={avatar.shape}
       definition={avatarDefinition(avatar.shape)}
-      followPointer
+      followPointer={followPointer}
       label=""
+      lookAt={lookAt}
+      mood={mood}
       size={size}
     />
   );
@@ -128,38 +145,58 @@ function LiveAvatar({
   className,
   "data-shape": dataShape,
   "data-color": dataColor,
+  "data-mood": dataMood,
   definition,
   color,
   followPointer,
   label,
+  mood,
+  lookAt,
 }: AvatarOptions & {
   size: number;
   className?: string;
   "data-shape": string;
   "data-color": string;
+  "data-mood"?: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
+  const mounted = useRef<MountedAvatar | null>(null);
 
   useEffect(() => {
     const element = host.current;
     if (element === null) return;
-    // A new picture replaces the mounted one. While it is mounted it still
-    // blinks and follows the pointer.
-    const mounted = mountAvatar(element, {
+    // A new picture replaces the mounted one. A mood or a look updates the
+    // one already on screen, so a glance does not restart the blink.
+    const avatar = mountAvatar(element, {
       definition,
       color,
       followPointer,
       label,
+      ...(mood !== undefined ? { mood } : {}),
+      ...(lookAt !== undefined ? { lookAt } : {}),
     });
+    mounted.current = avatar;
     return () => {
-      mounted.destroy();
+      avatar.destroy();
+      mounted.current = null;
     };
+    // mood and lookAt are applied by the effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [definition, color, followPointer, label]);
+
+  useEffect(() => {
+    if (mood === undefined && lookAt === undefined) return;
+    mounted.current?.update({
+      ...(mood !== undefined ? { mood } : {}),
+      ...(lookAt !== undefined ? { lookAt } : {}),
+    });
+  }, [mood, lookAt]);
 
   return (
     <div
       className={cn("inline-block shrink-0", className)}
       data-color={dataColor}
+      data-mood={dataMood}
       data-shape={dataShape}
       ref={host}
       style={{ width: size, height: size }}

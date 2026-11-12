@@ -5,6 +5,7 @@
  */
 import type * as acp from "@agentclientprotocol/sdk";
 import type { BotAvatar } from "./avatar.js";
+import type { ApprovalNotice } from "./protocol.js";
 import type { Schedule } from "./schedule.js";
 
 export const sharedPackage = "@companion/shared" as const;
@@ -105,11 +106,7 @@ export type ScheduleReceipt = {
 export type ApprovalDecision = "allow" | "deny";
 
 /** A sensitive action waiting for the user. */
-export type Approval = {
-  sessionId: string;
-  toolCallId: string;
-  title?: string;
-};
+export type Approval = ApprovalNotice;
 
 /** The engine request held open, and the way the user answers it. */
 export type HeldApproval = {
@@ -245,6 +242,7 @@ export {
   maxImagesPerMessage,
   parseTurnEvent,
   parseTurnEvents,
+  type ApprovalNotice,
   type AttachedImage,
   type ImageMimeType,
   type TurnEvent,

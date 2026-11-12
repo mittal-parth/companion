@@ -174,6 +174,7 @@ export function createReplyStream(): {
   let textCount = 0;
   let reasoningCount = 0;
   const tools = new Map<string, ToolDraft & { announced: boolean }>();
+  const asked = new Set<string>();
 
   const closeOpen = (out: UIMessageChunk[]) => {
     if (open?.kind === "text") out.push({ type: "text-end", id: open.id });
@@ -288,13 +289,66 @@ export function createReplyStream(): {
       });
     }
     if (part.state === "output-error") {
-      out.push({
-        type: "tool-output-error",
-        toolCallId: part.toolCallId,
-        errorText: part.errorText,
-        dynamic: true,
-      });
+      if (asked.has(part.toolCallId)) {
+        out.push({
+          type: "tool-output-denied",
+          toolCallId: part.toolCallId,
+        });
+      } else {
+        out.push({
+          type: "tool-output-error",
+          toolCallId: part.toolCallId,
+          errorText: part.errorText,
+          dynamic: true,
+        });
+      }
     }
+    return out;
+  };
+
+  const approvalChunks = (approval: {
+    sessionId: string;
+    toolCallId: string;
+    title?: string;
+  }): UIMessageChunk[] => {
+    const out: UIMessageChunk[] = [];
+    let draft = tools.get(approval.toolCallId);
+    if (draft === undefined) {
+      draft = {
+        toolCallId: approval.toolCallId,
+        title: approval.title,
+        announced: false,
+      };
+      tools.set(approval.toolCallId, draft);
+    } else if ((draft.title == null || draft.title === "") && approval.title) {
+      draft.title = approval.title;
+    }
+    if (!draft.announced) {
+      const input = draft.rawInput === undefined ? {} : draft.rawInput;
+      const part = toDynamicTool({
+        ...draft,
+        status: "pending",
+        rawInput: input,
+      });
+      if (part.state === "input-available") {
+        out.push({
+          type: "tool-input-available",
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          input: part.input,
+          dynamic: true,
+          title: part.title,
+        });
+        draft.announced = true;
+        if (draft.rawInput === undefined) draft.rawInput = input;
+      }
+    }
+    asked.add(approval.toolCallId);
+    out.push({
+      type: "tool-approval-request",
+      approvalId: approval.toolCallId,
+      toolCallId: approval.toolCallId,
+    });
     return out;
   };
 
@@ -306,6 +360,11 @@ export function createReplyStream(): {
         case "update":
           begin(out);
           out.push(...updateChunks(event.data));
+          break;
+        case "approval":
+          begin(out);
+          closeOpen(out);
+          out.push(...approvalChunks(event.data));
           break;
         case "done":
           begin(out);

@@ -23,6 +23,8 @@ import {
   isImageMime,
   nextRun,
   parseAvatar,
+  type Approval,
+  type ApprovalDecision,
   type AttachedImage,
   type Bot,
   type BotAvatar,
@@ -141,6 +143,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   const busy = new Set<string>();
   const turns = new Map<string, TurnState>();
   const followers = new Map<string, Set<(event: TurnEvent) => void>>();
+  const pending = new Map<string, Approval[]>();
   const idleWaiters = new Map<string, Array<() => void>>();
   let stopping = false;
   const schedulerHolder: { current?: Scheduler } = {};
@@ -177,6 +180,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     busy,
     turns,
     followers,
+    pending,
     whenIdle,
     release,
     stopping: () => stopping,
@@ -302,6 +306,8 @@ type Handler = {
   turns: Map<string, TurnState>;
   /** Clients following a bot's running turn, each told every event as it is stored. */
   followers: Map<string, Set<(event: TurnEvent) => void>>;
+  /** Approvals the chat has been told about and has not answered yet. */
+  pending: Map<string, Approval[]>;
   whenIdle(botId: string): Promise<void>;
   release(botId: string): void;
   stopping(): boolean;
@@ -399,6 +405,14 @@ async function handle(
     await handleBotSchedules(req, res, handler, botId, parts.slice(3));
     return;
   }
+  if (parts.length === 3 && parts[2] === "approvals") {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { error: "Use POST." });
+      return;
+    }
+    await answerApproval(req, res, handler, botId);
+    return;
+  }
   sendJson(res, 404, { error: "Unknown route." });
 }
 
@@ -426,6 +440,8 @@ function followTurn(
   const start =
     from ?? (turn.status === "running" ? turn.replyFrom : updates.length);
   const ending = turnEnding(turn);
+  const waiting =
+    turn.status === "running" ? [...(handler.pending.get(botId) ?? [])] : [];
   if (turn.status !== "running" && (start >= updates.length || !ending)) {
     res.writeHead(204);
     res.end();
@@ -434,6 +450,9 @@ function followTurn(
   res.writeHead(200, sseHeaders);
   for (const update of updates.slice(start)) {
     writeEvent(res, { event: "update", data: update });
+  }
+  for (const approval of waiting) {
+    writeEvent(res, { event: "approval", data: approval });
   }
   if (ending) {
     writeEvent(res, ending);
@@ -444,9 +463,19 @@ function followTurn(
   handler.followers.set(botId, listeners);
   const listener = (event: TurnEvent) => {
     writeEvent(res, event);
-    if (event.event !== "update") {
-      listeners.delete(listener);
-      res.end();
+    switch (event.event) {
+      case "update":
+      case "approval":
+        break;
+      case "done":
+      case "error":
+        listeners.delete(listener);
+        res.end();
+        break;
+      default: {
+        const unexpected: never = event;
+        throw new Error(`Unexpected event ${JSON.stringify(unexpected)}.`);
+      }
     }
   };
   listeners.add(listener);
@@ -921,6 +950,7 @@ function deleteBot(handler: Handler, botId: string): { deleted: string } {
   handler.store.deleteBot(botId);
   handler.turns.delete(botId);
   handler.followers.delete(botId);
+  handler.pending.delete(botId);
   for (const [token, owner] of handler.access.tokens) {
     if (owner === botId) handler.access.tokens.delete(token);
   }
@@ -1005,6 +1035,9 @@ async function sendMessage(
         send({ event: "update", data: update });
       },
       "keep",
+      (approval) => {
+        send({ event: "approval", data: approval });
+      },
     );
     send({ event: "done", data: { stopReason } });
     res.end();
@@ -1017,6 +1050,49 @@ async function sendMessage(
     }
     send({ event: "error", data: { error: message } });
     res.end();
+  }
+}
+
+/**
+ * Answers a permission the engine is holding for this bot.
+ * Allow lets the tool call continue. Deny stops it.
+ */
+async function answerApproval(
+  req: IncomingMessage,
+  res: ServerResponse,
+  handler: Handler,
+  botId: string,
+): Promise<void> {
+  handler.store.getBot(botId);
+  const body = await readObject(req);
+  const toolCallId = requiredString(
+    body,
+    "toolCallId",
+    "An approval needs a tool call.",
+  );
+  const decision = approvalDecision(body.decision);
+  if (handler.engine.answer === undefined) {
+    throw new HttpError(400, "This engine does not take approvals.");
+  }
+  const answered = handler.engine.answer(botId, toolCallId, decision);
+  if (!answered) {
+    throw new HttpError(404, "No approval is waiting for that step.");
+  }
+  const current = handler.pending.get(botId) ?? [];
+  handler.pending.set(
+    botId,
+    current.filter((item) => item.toolCallId !== toolCallId),
+  );
+  sendJson(res, 200, { toolCallId, decision });
+}
+
+function approvalDecision(value: unknown): ApprovalDecision {
+  switch (value) {
+    case "allow":
+    case "deny":
+      return value;
+    default:
+      throw new HttpError(400, "An approval is allow or deny.");
   }
 }
 
@@ -1036,6 +1112,7 @@ async function runTurn(
   images: readonly AttachedImage[],
   onUpdate: (update: acp.SessionUpdate) => void,
   said: "keep" | "hide",
+  onApproval?: (approval: Approval) => void,
 ): Promise<acp.StopReason> {
   const bot = handler.store.getBot(botId);
   if (bot.engine !== engines.opencode) {
@@ -1073,6 +1150,15 @@ async function runTurn(
         publish({ event: "update", data: update });
       },
       seen,
+      (approval) => {
+        const current = handler.pending.get(botId) ?? [];
+        handler.pending.set(botId, [
+          ...current.filter((item) => item.toolCallId !== approval.toolCallId),
+          approval,
+        ]);
+        onApproval?.(approval);
+        publish({ event: "approval", data: approval });
+      },
     );
     handler.turns.set(botId, { status: "finished", stopReason });
     publish({ event: "done", data: { stopReason } });
@@ -1083,6 +1169,7 @@ async function runTurn(
     publish({ event: "error", data: { error: message } });
     throw error;
   } finally {
+    handler.pending.delete(botId);
     handler.release(botId);
   }
 }

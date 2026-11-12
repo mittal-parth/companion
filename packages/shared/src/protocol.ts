@@ -48,8 +48,19 @@ export function isImageMime(value: string): value is ImageMimeType {
  * `update` is an ACP session update, in arrival order.
  * `done` is why the prompt stopped. `error` means the turn failed.
  */
+/**
+ * A tool call the chat can allow or deny.
+ * The same shape as an approval: the session, the tool call, and its title.
+ */
+export type ApprovalNotice = {
+  sessionId: string;
+  toolCallId: string;
+  title?: string;
+};
+
 export type TurnEvent =
   | { event: "update"; data: acp.SessionUpdate }
+  | { event: "approval"; data: ApprovalNotice }
   | { event: "done"; data: { stopReason: acp.StopReason } }
   | { event: "error"; data: { error: string } };
 
@@ -74,6 +85,11 @@ export function parseTurnEvent(block: string): TurnEvent | undefined {
         throw new Error("An update event needs a session update.");
       }
       return { event: "update", data: payload };
+    case "approval":
+      if (!isApproval(payload)) {
+        throw new Error("An approval event needs a tool call.");
+      }
+      return { event: "approval", data: payload };
     case "done":
       if (!isStop(payload)) {
         throw new Error("A done event needs a stop reason.");
@@ -105,6 +121,19 @@ function isSessionUpdate(value: unknown): value is acp.SessionUpdate {
     value !== null &&
     "sessionUpdate" in value &&
     typeof value.sessionUpdate === "string"
+  );
+}
+
+function isApproval(value: unknown): value is ApprovalNotice {
+  if (typeof value !== "object" || value === null) return false;
+  if (!("sessionId" in value) || !("toolCallId" in value)) return false;
+  const title = "title" in value ? value.title : undefined;
+  return (
+    typeof value.sessionId === "string" &&
+    value.sessionId !== "" &&
+    typeof value.toolCallId === "string" &&
+    value.toolCallId !== "" &&
+    (title === undefined || typeof title === "string")
   );
 }
 
