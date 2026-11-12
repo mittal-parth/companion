@@ -8,11 +8,7 @@
  */
 import { cn } from "cn";
 import { useEffect, useRef } from "react";
-import {
-  mountAvatar,
-  type AvatarOptions,
-  type MountedAvatar,
-} from "open-bot-avatar/dom";
+import { mountAvatar, type AvatarOptions } from "open-bot-avatar/dom";
 import {
   avatarColors,
   avatarDefinition,
@@ -132,7 +128,10 @@ function LiveAvatar({
   className,
   "data-shape": dataShape,
   "data-color": dataColor,
-  ...options
+  definition,
+  color,
+  followPointer,
+  label,
 }: AvatarOptions & {
   size: number;
   className?: string;
@@ -140,24 +139,21 @@ function LiveAvatar({
   "data-color": string;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  const avatar = useRef<MountedAvatar | null>(null);
-  const latest = useRef(options);
-  latest.current = options;
 
   useEffect(() => {
     const element = host.current;
     if (element === null) return;
-    const mounted = mountAvatar(element, latest.current);
-    avatar.current = mounted;
+    // A new picture replaces the mounted one. While it is mounted it still
+    // blinks and follows the pointer.
+    const mounted = mountAvatar(element, {
+      definition,
+      color,
+      followPointer,
+      label,
+    });
     return () => {
       mounted.destroy();
-      avatar.current = null;
     };
-  }, []);
-
-  const { definition, color, followPointer, label } = options;
-  useEffect(() => {
-    avatar.current?.update(latest.current);
   }, [definition, color, followPointer, label]);
 
   return (
