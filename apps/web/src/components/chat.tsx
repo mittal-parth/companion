@@ -6,8 +6,11 @@
  * resumed from the daemon, which replays the reply, so a reload does not
  * show it twice. While a reply is still being written, a status row sits
  * under the bot's latest message: its picture, three dots, and a rotating line.
+ * A tool call stays out of the thread. When a step needs a decision, Allow
+ * and Deny sit on that step until it is answered. Deny stops the call.
  */
 import { BotAvatar } from "@/components/bot-avatar";
+import { Button } from "@/components/ui/button";
 import {
   Conversation,
   ConversationContent,
@@ -36,6 +39,7 @@ import {
   ReasoningContent,
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
+import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool";
 import { lastChatLine } from "@/lib/converter";
 import {
   nextLook,
@@ -95,13 +99,15 @@ export function Chat({
       }),
     [replyFrom],
   );
-  const { messages, sendMessage, status, error } = useChat({
-    id: botId,
-    messages: initialMessages,
-    resume,
-    transport,
-  });
+  const { messages, sendMessage, status, error, addToolApprovalResponse } =
+    useChat({
+      id: botId,
+      messages: initialMessages,
+      resume,
+      transport,
+    });
   const [formError, setFormError] = useState<string>();
+  const [deciding, setDeciding] = useState<string>();
   useEffect(() => {
     onPreview(botId, lastChatLine(messages));
   }, [botId, messages, onPreview]);
@@ -122,7 +128,11 @@ export function Chat({
             messages.map((message, index) => (
               <Message from={message.role} key={message.id}>
                 <MessageParts
+                  deciding={deciding}
                   message={message}
+                  onDecide={(toolCallId, approvalId, decision) =>
+                    void decide(toolCallId, approvalId, decision)
+                  }
                   streaming={
                     busy &&
                     message.role === "assistant" &&
@@ -182,19 +192,66 @@ export function Chat({
     }
     await sendMessage({ files: message.files, text });
   }
+
+  async function decide(
+    toolCallId: string,
+    approvalId: string,
+    decision: "allow" | "deny",
+  ) {
+    setDeciding(toolCallId);
+    setFormError(undefined);
+    try {
+      const response = await fetch(
+        `/api/chat/${encodeURIComponent(botId)}/approval`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ toolCallId, decision }),
+        },
+      );
+      if (!response.ok) {
+        const body: unknown = await response.json().catch(() => undefined);
+        const message =
+          typeof body === "object" &&
+          body !== null &&
+          "error" in body &&
+          typeof body.error === "string"
+            ? body.error
+            : "The approval could not be sent.";
+        setFormError(message);
+        return;
+      }
+      await addToolApprovalResponse({
+        id: approvalId,
+        approved: decision === "allow",
+      });
+    } finally {
+      setDeciding(undefined);
+    }
+  }
 }
 
 /**
  * The pieces of one turn.
  * Words and pictures share a bubble. A thought stays beside that bubble.
- * A tool call is not shown: the thread is the text OpenCode sent, not each update.
+ * A tool call is not shown: the thread is the text OpenCode sent.
+ * The exception is a step that still needs a decision. Allow and Deny sit
+ * on that step, and they leave once it is answered. The status row is separate.
  */
 function MessageParts({
   message,
   streaming,
+  deciding,
+  onDecide,
 }: {
   message: UIMessage;
   streaming: boolean;
+  deciding?: string;
+  onDecide: (
+    toolCallId: string,
+    approvalId: string,
+    decision: "allow" | "deny",
+  ) => void;
 }) {
   const rendered: ReactNode[] = [];
   let bubble: ReactNode[] = [];
@@ -239,7 +296,46 @@ function MessageParts({
       );
       return;
     }
-    if (part.type === "dynamic-tool") return;
+    if (part.type === "dynamic-tool") {
+      if (part.state !== "approval-requested") return;
+      flushBubble();
+      rendered.push(
+        <Tool defaultOpen key={part.toolCallId}>
+          <ToolHeader
+            state={part.state}
+            title={part.title}
+            toolName={part.toolName}
+            type="dynamic-tool"
+          />
+          <ToolContent>
+            <div className="flex gap-2" data-approval={part.toolCallId}>
+              <Button
+                disabled={deciding === part.toolCallId}
+                onClick={() =>
+                  onDecide(part.toolCallId, part.approval.id, "allow")
+                }
+                size="sm"
+                type="button"
+              >
+                Allow
+              </Button>
+              <Button
+                disabled={deciding === part.toolCallId}
+                onClick={() =>
+                  onDecide(part.toolCallId, part.approval.id, "deny")
+                }
+                size="sm"
+                type="button"
+                variant="destructive"
+              >
+                Deny
+              </Button>
+            </div>
+          </ToolContent>
+        </Tool>,
+      );
+      return;
+    }
     flushBubble();
     if (part.type === "reasoning") {
       rendered.push(

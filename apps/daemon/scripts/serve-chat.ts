@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as acp from "@agentclientprotocol/sdk";
+import type { ApprovalDecision } from "@companion/shared";
 import { startDaemon } from "../src/api.js";
 import { daemonUrlFile, gateFile } from "./chat-paths.js";
 
@@ -77,11 +78,18 @@ process.on("SIGTERM", () => void stop(0));
  * A recording sets COMPANION_CHAT_HOLD=0 and pauses between chunks instead.
  */
 function heldEngine() {
+  const pending = new Map<string, (decision: ApprovalDecision) => void>();
   return {
     async prompt(
       _botId: string,
       text: string,
       onUpdate: (update: acp.SessionUpdate) => void,
+      _images?: readonly unknown[],
+      onApproval?: (approval: {
+        sessionId: string;
+        toolCallId: string;
+        title?: string;
+      }) => void,
     ): Promise<acp.StopReason> {
       if (text.startsWith("Your name is")) {
         onUpdate({
@@ -92,6 +100,9 @@ function heldEngine() {
           },
         });
         return "end_turn";
+      }
+      if (text === "Read the vault") {
+        return askForVault(onUpdate, onApproval, pending);
       }
       if (hold) rmSync(gateFile, { force: true });
       await pace();
@@ -136,8 +147,82 @@ function heldEngine() {
       });
       return "end_turn";
     },
+    answer(_botId: string, toolCallId: string, decision: ApprovalDecision) {
+      const resolve = pending.get(toolCallId);
+      if (resolve === undefined) return false;
+      pending.delete(toolCallId);
+      resolve(decision);
+      return true;
+    },
     async close() {},
   };
+}
+
+/**
+ * One tool call that waits for Allow or Deny.
+ * Deny fails the call and does not reveal the vault. Allow finishes it.
+ */
+function askForVault(
+  onUpdate: (update: acp.SessionUpdate) => void,
+  onApproval:
+    | ((approval: {
+        sessionId: string;
+        toolCallId: string;
+        title?: string;
+      }) => void)
+    | undefined,
+  pending: Map<string, (decision: ApprovalDecision) => void>,
+): Promise<acp.StopReason> {
+  const toolCallId = "tool-vault";
+  const secret = "cobalt";
+  onUpdate({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "This step needs a decision.\n\n" },
+  });
+  onUpdate({
+    sessionUpdate: "tool_call",
+    toolCallId,
+    title: "read vault",
+    name: "read",
+    kind: "read",
+    status: "pending",
+    rawInput: { path: "vault.txt" },
+  });
+  return new Promise((resolve) => {
+    pending.set(toolCallId, (decision) => {
+      if (decision === "deny") {
+        onUpdate({
+          sessionUpdate: "tool_call_update",
+          toolCallId,
+          status: "failed",
+          rawOutput: { error: "The user declined this tool call" },
+        });
+        resolve("cancelled");
+        return;
+      }
+      onUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId,
+        status: "completed",
+        content: [
+          {
+            type: "content",
+            content: { type: "text", text: secret },
+          },
+        ],
+      });
+      onUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: `**${secret}**` },
+      });
+      resolve("end_turn");
+    });
+    onApproval?.({
+      sessionId: "scripted",
+      toolCallId,
+      title: "read vault",
+    });
+  });
 }
 
 /** Pauses between chunks when a recording asked for a visible stream. */

@@ -56,3 +56,60 @@ export function holdApproval(
     result: decision.then((next) => approvalResponse(request.options, next)),
   };
 }
+
+/**
+ * The permissions one engine is holding for the chat.
+ * Each stays blocked until that bot's tool call is allowed or denied.
+ * Denying the ones still open lets a cancelled turn finish.
+ */
+export function createApprovalGate(): {
+  hold(
+    botId: string,
+    request: acp.RequestPermissionRequest,
+    onApproval: (approval: Approval) => void,
+  ): Promise<acp.RequestPermissionResponse>;
+  answer(
+    botId: string,
+    toolCallId: string,
+    decision: ApprovalDecision,
+  ): boolean;
+  denyWaiting(botId: string): void;
+} {
+  const waiting = new Map<string, Map<string, HeldApproval>>();
+
+  const take = (
+    botId: string,
+    toolCallId: string,
+  ): HeldApproval | undefined => {
+    const tools = waiting.get(botId);
+    const held = tools?.get(toolCallId);
+    tools?.delete(toolCallId);
+    return held;
+  };
+
+  return {
+    hold(botId, request, onApproval) {
+      const held = holdApproval(request);
+      const tools = waiting.get(botId) ?? new Map<string, HeldApproval>();
+      waiting.set(botId, tools);
+      tools.set(held.approval.toolCallId, held);
+      onApproval(held.approval);
+      return held.result.finally(() => {
+        tools.delete(held.approval.toolCallId);
+      });
+    },
+    answer(botId, toolCallId, decision) {
+      const held = take(botId, toolCallId);
+      if (held === undefined) return false;
+      held.answer(decision);
+      return true;
+    },
+    denyWaiting(botId) {
+      const tools = waiting.get(botId);
+      if (tools === undefined) return;
+      for (const toolCallId of [...tools.keys()]) {
+        take(botId, toolCallId)?.answer("deny");
+      }
+    },
+  };
+}

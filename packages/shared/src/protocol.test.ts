@@ -33,3 +33,19 @@ test("a finished turn body is one event per block", () => {
     { event: "done", data: { stopReason: "end_turn" } },
   ]);
 });
+
+test("an approval event names the tool call", () => {
+  const body = [
+    'event: approval\ndata: {"sessionId":"ses","toolCallId":"call-1","title":"read vault"}',
+    "",
+  ].join("\n\n");
+  expect(parseTurnEvents(body)).toEqual([
+    {
+      event: "approval",
+      data: { sessionId: "ses", toolCallId: "call-1", title: "read vault" },
+    },
+  ]);
+  expect(() =>
+    parseTurnEvents('event: approval\ndata: {"sessionId":"ses"}\n\n'),
+  ).toThrow(/tool call/);
+});

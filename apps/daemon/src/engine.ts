@@ -21,12 +21,14 @@ import {
   isImageMime,
   maxImageBytes,
   maxImagesPerMessage,
+  type Approval,
+  type ApprovalDecision,
   type AttachedImage,
   type ImageMimeType,
 } from "@companion/shared";
 import type { ThreadStore } from "./thread-store.js";
 import { botConversation } from "./thread-store.js";
-import { approvalResponse } from "./approval.js";
+import { approvalResponse, createApprovalGate } from "./approval.js";
 
 /** Sarvam's GLM 5.3, the model a bot's conversation runs on. */
 export const defaultOpencodeModel = "sarvam/glm5.3";
@@ -481,7 +483,17 @@ export type Engine = {
     text: string,
     onUpdate: (update: acp.SessionUpdate) => void,
     images?: readonly AttachedImage[],
+    onApproval?: (approval: Approval) => void,
   ): Promise<acp.StopReason>;
+  /**
+   * Answers a permission this engine is holding for the bot.
+   * False when that tool call is not waiting. Engines that never ask can omit it.
+   */
+  answer?(
+    botId: string,
+    toolCallId: string,
+    decision: ApprovalDecision,
+  ): boolean;
   close(): Promise<void>;
 };
 
@@ -559,6 +571,12 @@ export async function startOpencodeEngine(options: {
 
   const listeners = new Map<string, (update: acp.SessionUpdate) => void>();
   const openSessions = new Set<string>();
+  const gate = createApprovalGate();
+  /** Which bot a live session belongs to, so a permission can be answered. */
+  const sessionBots = new Map<string, string>();
+  const approvalListeners = new Map<string, (approval: Approval) => void>();
+  /** Keeps the idle watch from cancelling a turn that is waiting on the user. */
+  const activity = new Map<string, (update: acp.SessionUpdate) => void>();
   let starting = true;
   let startupFailed = false;
   let failStartup: (error: Error) => void = () => {};
@@ -575,7 +593,21 @@ export async function startOpencodeEngine(options: {
   const connection = acp
     .client({ name: "companion" })
     .onRequest(acp.methods.client.session.requestPermission, (ctx) => {
-      return approvalResponse(ctx.params.options, "allow");
+      const sessionId = ctx.params.sessionId;
+      const botId = sessionBots.get(sessionId);
+      const listener = approvalListeners.get(sessionId);
+      // A request outside a turn the chat is watching is allowed, so the
+      // engine is not stuck on a question nobody can answer.
+      if (botId === undefined || listener === undefined) {
+        return approvalResponse(ctx.params.options, "allow");
+      }
+      activity.get(sessionId)?.({
+        sessionUpdate: "tool_call",
+        toolCallId: ctx.params.toolCall.toolCallId,
+        title: ctx.params.toolCall.title ?? "approval",
+        status: "pending",
+      });
+      return gate.hold(botId, ctx.params, listener);
     })
     .onNotification(acp.methods.client.session.update, (ctx) => {
       listeners.get(ctx.params.sessionId)?.(ctx.params.update);
@@ -616,7 +648,11 @@ export async function startOpencodeEngine(options: {
   starting = false;
 
   return {
-    async prompt(botId, text, onUpdate, images) {
+    answer(botId, toolCallId, decision) {
+      return gate.answer(botId, toolCallId, decision);
+    },
+
+    async prompt(botId, text, onUpdate, images, onApproval) {
       const sessionId = await openSession(
         agent,
         options.store,
@@ -632,11 +668,17 @@ export async function startOpencodeEngine(options: {
         abort.abort();
       });
       const cancel = () => {
+        gate.denyWaiting(botId);
         void agent
           .notify(acp.methods.agent.session.cancel, { sessionId })
           .catch(() => undefined);
       };
       abort.signal.addEventListener("abort", cancel);
+      sessionBots.set(sessionId, botId);
+      activity.set(sessionId, (update) => idle.note(update));
+      if (onApproval !== undefined) {
+        approvalListeners.set(sessionId, onApproval);
+      }
       listeners.set(sessionId, (update) => {
         idle.note(update);
         onUpdate(update);
@@ -660,8 +702,12 @@ export async function startOpencodeEngine(options: {
         throw withStderr(error, stderr);
       } finally {
         idle.stop();
+        gate.denyWaiting(botId);
         abort.signal.removeEventListener("abort", cancel);
         listeners.delete(sessionId);
+        approvalListeners.delete(sessionId);
+        activity.delete(sessionId);
+        sessionBots.delete(sessionId);
       }
     },
 

@@ -4,6 +4,7 @@ import { expect, test } from "vitest";
 import {
   approvalFrom,
   approvalResponse,
+  createApprovalGate,
   holdApproval,
 } from "../src/approval.js";
 
@@ -54,6 +55,42 @@ test("the engine stays blocked until the approval is answered", async () => {
   held.answer("deny");
   await pending;
   expect(answered).toBe(true);
+});
+
+test("a gate answers one tool call and denies the rest when the turn ends", async () => {
+  const gate = createApprovalGate();
+  const seen: string[] = [];
+  const first = gate.hold(
+    "bot",
+    {
+      sessionId,
+      toolCall: { toolCallId, title: "read" },
+      options,
+    },
+    (approval) => {
+      seen.push(approval.toolCallId);
+    },
+  );
+  const second = gate.hold(
+    "bot",
+    {
+      sessionId,
+      toolCall: { toolCallId: "call-2", title: "write" },
+      options,
+    },
+    () => undefined,
+  );
+  expect(seen).toEqual([toolCallId]);
+  expect(gate.answer("bot", "missing", "allow")).toBe(false);
+  expect(gate.answer("bot", toolCallId, "allow")).toBe(true);
+  expect(gate.answer("bot", toolCallId, "deny")).toBe(false);
+  gate.denyWaiting("bot");
+  await expect(first).resolves.toEqual({
+    outcome: { outcome: "selected", optionId: "once" },
+  });
+  await expect(second).resolves.toEqual({
+    outcome: { outcome: "selected", optionId: "no" },
+  });
 });
 
 test("a denial stops the tool call", async () => {

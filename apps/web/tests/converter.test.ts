@@ -163,6 +163,46 @@ test("a live reply streams text, reasoning, tools, and errors", () => {
   expect(reply.outcome()).toEqual({ status: "failed" });
 });
 
+test("an approval asks on the tool step and a denial leaves the secret out", () => {
+  const secret = "cobalt";
+  const reply = createReplyStream();
+  const tool: acp.SessionUpdate = {
+    sessionUpdate: "tool_call",
+    toolCallId: "tool-vault",
+    title: "read vault",
+    status: "pending",
+    rawInput: { path: "vault.txt" },
+  };
+  const denied: acp.SessionUpdate = {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "tool-vault",
+    status: "failed",
+    rawOutput: { error: "The user declined this tool call", secret },
+  };
+  const chunks = [
+    ...reply.chunks({ event: "update", data: tool }),
+    ...reply.chunks({
+      event: "approval",
+      data: {
+        sessionId: "scripted",
+        toolCallId: "tool-vault",
+        title: "read vault",
+      },
+    }),
+    ...reply.chunks({ event: "update", data: denied }),
+  ];
+  expect(chunks).toContainEqual({
+    type: "tool-approval-request",
+    approvalId: "tool-vault",
+    toolCallId: "tool-vault",
+  });
+  expect(chunks).toContainEqual({
+    type: "tool-output-denied",
+    toolCallId: "tool-vault",
+  });
+  expect(JSON.stringify(chunks)).not.toContain(secret);
+});
+
 test("a finished turn closes the assistant message", () => {
   const reply = createReplyStream();
   const chunks = reply.chunks({
