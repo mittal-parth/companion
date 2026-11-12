@@ -7,3 +7,16 @@
 - Have doc comments for methods and files focused on the purpose of the method. Don't focus too much on the technical tid bits but rather the purpose of the method.
 - Inline comments explaining the change at important points in the method are welcome. However, don't add incremental comments explaining the diff that just happened in that change. Remember, focus is on the overall purpose.
 - Prefer existing, maintained components and libraries (AI Elements, shadcn, the AI SDK) over writing our own, and customise them only lightly.
+
+## Pull request media
+
+Cite a screenshot as a markdown image, and a recording as `<video src="/opt/cursor/artifacts/<name>.mp4"></video>`. The file must already be under `/opt/cursor/artifacts/`. Update the pull request body through the pull-request tool so it uploads the file.
+
+For a recording, the tool rewrites that video tag into a poster image linked to the agent artifacts page. That poster is the attachment. Leave the rewrite as the tool wrote it.
+
+Do not:
+
+- Copy or rename the mp4, including to `.bin`, and cite that copy. GitHub serves the copy as a file download.
+- Hand-write a cursor.com URL, an `artifacts/c/art-...` URL, or a link to the agent artifacts page. A URL you type does not attach the file.
+- Replace the tool's poster with a download link, a markdown link to the file, or a video tag whose src is a URL.
+- Cite a recording as an image, or a screenshot as a video, to get around the rewrite.

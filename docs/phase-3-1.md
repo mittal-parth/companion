@@ -1,6 +1,6 @@
 # Phase 3.1
 
-The web app opens the computer's first bot, or creates one named Companion. Task 3.2 lists the others. The transcript is already there, including the greeting from the bot's first turn. A message streams back as it is written. An image can go with the text. Reloading while a turn is still running continues that reply instead of starting it over.
+The web app opens the computer's first bot. When there are none, it shows a screen to create one. Task 3.2 lists the others. The transcript is already there, including the greeting from the bot's first turn. A message streams back as it is written. An image can go with the text. Reloading while a turn is still running continues that reply instead of starting it over.
 
 The browser never talks to the daemon. It talks to Next.js routes, and those routes talk to the daemon on `COMPANION_DAEMON_URL`. `POST /api/chat` sends the latest message. `GET /api/chat/[id]/stream` rejoins a turn that was already running when the page loaded. Both answer with a server-sent event stream in the AI SDK's UI message format. The daemon still speaks ACP. One converter in the web app is the only place that translates.
 

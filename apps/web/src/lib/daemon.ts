@@ -46,22 +46,17 @@ export type LoadedBot = {
 };
 
 /**
- * The first bot, creating Companion when this computer has none.
+ * The first bot, when this computer has one.
  * Opening the page uses this bot. It does not remember which one was open last.
+ * An empty computer stays empty, so the page can ask for a name.
  */
 export async function openFirstBot(): Promise<{
   bots: BotSummary[];
-  chat: LoadedBot;
+  chat: LoadedBot | null;
 }> {
-  let bots = await listBots();
-  if (bots.length === 0) {
-    const created = await createBot("Companion");
-    bots = [{ id: created.id, name: created.name }];
-  }
+  const bots = await listBots();
   const first = bots[0];
-  if (first === undefined) {
-    throw new Error("The daemon has no bot.");
-  }
+  if (first === undefined) return { bots, chat: null };
   return { bots, chat: await loadBot(first.id) };
 }
 
@@ -156,18 +151,6 @@ export function messageForDaemon(message: UIMessage): {
     throw new Error("A message needs text.");
   }
   return { text, images };
-}
-
-async function createBot(name: string): Promise<BotView> {
-  const response = await fetch(`${daemonUrl()}/bots`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (!response.ok) {
-    throw new Error(await daemonError(response));
-  }
-  return (await response.json()) as BotView;
 }
 
 async function daemonJson<T>(path: string): Promise<T> {

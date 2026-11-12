@@ -25,7 +25,7 @@ export default async function Home() {
 }
 
 /**
- * The sidebar and the first bot.
+ * The sidebar, and the first bot when this computer has one.
  * A failure here is the daemon being unreachable, which the page explains.
  */
 async function openHome(): Promise<

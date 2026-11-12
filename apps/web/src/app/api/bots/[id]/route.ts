@@ -1,6 +1,7 @@
 /**
  * One bot, as the sidebar uses it.
  * GET is the conversation. PATCH changes the name and leaves the conversation.
+ * DELETE removes the bot and its conversation.
  */
 import { daemonError, daemonFetch, loadBot } from "@/lib/daemon";
 import type { BotView } from "@companion/shared";
@@ -52,6 +53,28 @@ export async function PATCH(
     }
     const bot = (await daemon.json()) as BotView;
     return Response.json({ id: bot.id, name: bot.name });
+  } catch (error) {
+    return daemonFailure(error);
+  }
+}
+
+export async function DELETE(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  await connection();
+  const { id } = await context.params;
+  try {
+    const daemon = await daemonFetch(`/bots/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    if (!daemon.ok) {
+      return Response.json(
+        { error: await daemonError(daemon) },
+        { status: daemon.status || 502 },
+      );
+    }
+    return Response.json(await daemon.json());
   } catch (error) {
     return daemonFailure(error);
   }

@@ -2,12 +2,22 @@
 
 /**
  * The sidebar of this computer's bots, and the conversation that is open.
- * Creating a bot waits for its greeting. The chat header name, beside the
- * theme control, is edited in place: click it, then leave the field or press
- * Enter. Escape keeps the previous name. A refresh opens the first bot again.
+ * A right-click on a row edits or deletes that bot. Edit replaces the row's
+ * name with a text field: Enter or leaving the field saves, and Escape keeps
+ * the previous name. The chat header only shows the name, beside the theme
+ * control. Delete asks first, then removes the bot and its conversation.
+ * The next bot opens, or the one above when the deleted bot was last in the
+ * list. The last bot leaves a screen that asks for a name. A refresh opens
+ * the first bot again, and an empty computer stays on that screen.
  */
 import { Chat } from "@/components/chat";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   Dialog,
   DialogContent,
@@ -40,7 +50,7 @@ export function BotShell({
   chat: initialChat,
 }: {
   bots: BotSummary[];
-  chat: LoadedBot;
+  chat: LoadedBot | null;
 }) {
   const [bots, setBots] = useState(initialBots);
   const [chat, setChat] = useState(initialChat);
@@ -50,8 +60,12 @@ export function BotShell({
   const [createName, setCreateName] = useState("");
   const [createError, setCreateError] = useState<string>();
   const [creating, setCreating] = useState(false);
-  const [renaming, setRenaming] = useState(false);
-  const [renameValue, setRenameValue] = useState(initialChat.name);
+  const [editingId, setEditingId] = useState<string>();
+  const [renameValue, setRenameValue] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<BotSummary>();
+  const [deleteError, setDeleteError] = useState<string>();
+  const [deleting, setDeleting] = useState(false);
+  const createNameRef = useRef<HTMLInputElement>(null);
   const renameLock = useRef(false);
   // Bumped when an edit starts or is dropped, so a late blur cannot save it.
   const renameGeneration = useRef(0);
@@ -66,6 +80,10 @@ export function BotShell({
             aria-label="New bot"
             onClick={() => {
               setCreateError(undefined);
+              if (bots.length === 0) {
+                createNameRef.current?.focus();
+                return;
+              }
               setCreateOpen(true);
             }}
             size="icon-sm"
@@ -78,19 +96,74 @@ export function BotShell({
         <SidebarContent>
           <SidebarGroup>
             <SidebarGroupContent>
-              <SidebarMenu>
-                {bots.map((bot) => (
-                  <SidebarMenuItem key={bot.id}>
-                    <SidebarMenuButton
-                      isActive={bot.id === chat.id}
-                      onClick={() => void openBot(bot.id)}
-                      type="button"
-                    >
-                      <span className="truncate">{bot.name}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
+              {bots.length === 0 ? (
+                <p className="px-4 py-6 text-center text-sm text-sidebar-foreground/70">
+                  No bots yet
+                </p>
+              ) : (
+                <SidebarMenu>
+                  {bots.map((bot) => (
+                    <SidebarMenuItem key={bot.id}>
+                      {editingId === bot.id ? (
+                        <form
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            void saveRename(renameSession, bot.id);
+                          }}
+                        >
+                          <input
+                            aria-label="Bot name"
+                            autoComplete="off"
+                            autoFocus
+                            className="h-8 w-full min-w-0 rounded-md border border-sidebar-border bg-background px-2 text-sm text-sidebar-foreground outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                            onBlur={() =>
+                              void saveRename(renameSession, bot.id)
+                            }
+                            onChange={(event) =>
+                              setRenameValue(event.target.value)
+                            }
+                            onFocus={(event) => event.currentTarget.select()}
+                            onKeyDown={(event) => {
+                              if (event.key !== "Escape") return;
+                              event.preventDefault();
+                              renameGeneration.current += 1;
+                              setEditingId(undefined);
+                            }}
+                            spellCheck={false}
+                            value={renameValue}
+                          />
+                        </form>
+                      ) : (
+                        <ContextMenu>
+                          <ContextMenuTrigger asChild>
+                            <SidebarMenuButton
+                              isActive={bot.id === chat?.id}
+                              onClick={() => void openBot(bot.id)}
+                              type="button"
+                            >
+                              <span className="truncate">{bot.name}</span>
+                            </SidebarMenuButton>
+                          </ContextMenuTrigger>
+                          <ContextMenuContent>
+                            <ContextMenuItem onSelect={() => beginEdit(bot)}>
+                              Edit
+                            </ContextMenuItem>
+                            <ContextMenuItem
+                              onSelect={() => {
+                                setDeleteError(undefined);
+                                setPendingDelete(bot);
+                              }}
+                              variant="destructive"
+                            >
+                              Delete
+                            </ContextMenuItem>
+                          </ContextMenuContent>
+                        </ContextMenu>
+                      )}
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              )}
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
@@ -98,56 +171,13 @@ export function BotShell({
       <SidebarInset className="min-h-0 overflow-hidden">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-2">
           <SidebarTrigger />
-          <div className="min-w-0 flex-1">
-            {renaming ? (
-              <form
-                className="inline-grid max-w-full min-w-0"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void saveRename(renameSession);
-                }}
-              >
-                <span
-                  aria-hidden
-                  className="invisible col-start-1 row-start-1 px-2 text-sm leading-5 font-medium whitespace-pre"
-                >
-                  {renameValue || " "}
-                </span>
-                <input
-                  aria-label="Bot name"
-                  autoComplete="off"
-                  autoFocus
-                  className="col-start-1 row-start-1 w-px min-w-full border-0 bg-transparent px-2 py-0 text-sm leading-5 font-medium shadow-none outline-none"
-                  onBlur={() => void saveRename(renameSession)}
-                  onChange={(event) => setRenameValue(event.target.value)}
-                  onFocus={(event) => event.currentTarget.select()}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Escape") return;
-                    event.preventDefault();
-                    renameGeneration.current += 1;
-                    setRenameValue(chat.name);
-                    setRenaming(false);
-                  }}
-                  spellCheck={false}
-                  value={renameValue}
-                />
-              </form>
-            ) : (
-              <button
-                aria-label={`Rename ${chat.name}`}
-                className="max-w-full truncate px-2 text-left text-sm leading-5 font-medium"
-                onClick={() => {
-                  renameGeneration.current += 1;
-                  setRenameValue(chat.name);
-                  setShellError(undefined);
-                  setRenaming(true);
-                }}
-                type="button"
-              >
-                {chat.name}
-              </button>
-            )}
-          </div>
+          {chat !== null ? (
+            <h1 className="min-w-0 flex-1 truncate px-2 text-sm font-medium">
+              {chat.name}
+            </h1>
+          ) : (
+            <div className="flex-1" />
+          )}
           <ThemeToggle className="shrink-0" />
         </header>
         {shellError ? (
@@ -155,16 +185,60 @@ export function BotShell({
             {shellError}
           </p>
         ) : null}
-        <Chat
-          botId={chat.id}
-          failure={chat.failure}
-          key={chat.id}
-          locked={switching}
-          messages={chat.messages}
-          name={chat.name}
-          replyFrom={chat.replyFrom}
-          resume={chat.resume}
-        />
+        {chat !== null ? (
+          <Chat
+            botId={chat.id}
+            failure={chat.failure}
+            key={chat.id}
+            locked={switching}
+            messages={chat.messages}
+            name={chat.name}
+            replyFrom={chat.replyFrom}
+            resume={chat.resume}
+          />
+        ) : bots.length === 0 ? (
+          <main className="flex flex-1 items-center justify-center p-8">
+            <form
+              className="w-full max-w-sm"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void createBot();
+              }}
+            >
+              <h1 className="text-base font-medium">Create a bot</h1>
+              <p className="pt-2 text-sm text-muted-foreground">
+                Give it a name. It will greet you and ask what it is for.
+              </p>
+              <Input
+                aria-label="Name"
+                autoComplete="off"
+                autoFocus
+                className="mt-4"
+                disabled={creating}
+                onChange={(event) => setCreateName(event.target.value)}
+                placeholder="Name your bot"
+                ref={createNameRef}
+                value={createName}
+              />
+              {createError ? (
+                <p className="pt-2 text-destructive text-sm" role="alert">
+                  {createError}
+                </p>
+              ) : null}
+              <Button
+                className="mt-4"
+                disabled={creating || createName.trim() === ""}
+                type="submit"
+              >
+                {creating ? "Creating" : "Create"}
+              </Button>
+            </form>
+          </main>
+        ) : (
+          <main className="flex flex-1 items-center justify-center p-8">
+            <p className="text-muted-foreground">Choose a bot.</p>
+          </main>
+        )}
       </SidebarInset>
       <Dialog open={createOpen} onOpenChange={closeCreate}>
         <DialogContent>
@@ -213,6 +287,51 @@ export function BotShell({
           </form>
         </DialogContent>
       </Dialog>
+      <Dialog
+        open={pendingDelete !== undefined}
+        onOpenChange={(open) => {
+          if (open || deleting) return;
+          setPendingDelete(undefined);
+          setDeleteError(undefined);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Delete {pendingDelete?.name ?? "this bot"}?
+            </DialogTitle>
+            <DialogDescription>
+              This deletes the bot and its conversation.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError ? (
+            <p className="text-destructive text-sm" role="alert">
+              {deleteError}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button
+              disabled={deleting}
+              onClick={() => {
+                setPendingDelete(undefined);
+                setDeleteError(undefined);
+              }}
+              type="button"
+              variant="outline"
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={deleting || pendingDelete === undefined}
+              onClick={() => void confirmDelete()}
+              type="button"
+              variant="destructive"
+            >
+              {deleting ? "Deleting" : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </SidebarProvider>
   );
 
@@ -225,8 +344,15 @@ export function BotShell({
     }
   }
 
-  async function openBot(id: string) {
-    if (id === chat.id || switching) return;
+  function beginEdit(bot: BotSummary) {
+    renameGeneration.current += 1;
+    setRenameValue(bot.name);
+    setEditingId(bot.id);
+    setShellError(undefined);
+  }
+
+  async function openBot(id: string): Promise<boolean> {
+    if (switching || id === chat?.id) return id === chat?.id;
     setSwitching(true);
     setShellError(undefined);
     try {
@@ -236,11 +362,12 @@ export function BotShell({
         throw new Error(messageFrom(body, "The bot could not be opened."));
       }
       setChat(body);
-      setRenaming(false);
+      return true;
     } catch (error) {
       setShellError(
         error instanceof Error ? error.message : "The bot could not be opened.",
       );
+      return false;
     } finally {
       setSwitching(false);
     }
@@ -263,7 +390,6 @@ export function BotShell({
       }
       setBots((list) => [...list, { id: body.id, name: body.name }]);
       setChat(body);
-      setRenaming(false);
       setCreateName("");
       setCreateOpen(false);
     } catch (error) {
@@ -277,18 +403,19 @@ export function BotShell({
     }
   }
 
-  async function saveRename(generation: number) {
+  async function saveRename(generation: number, botId: string) {
     if (generation !== renameGeneration.current || renameLock.current) return;
     renameLock.current = true;
+    const currentName = bots.find((bot) => bot.id === botId)?.name;
     const next = renameValue.trim();
-    if (next === "" || next === chat.name) {
+    if (currentName === undefined || next === "" || next === currentName) {
       renameGeneration.current += 1;
-      setRenaming(false);
+      setEditingId((id) => (id === botId ? undefined : id));
       renameLock.current = false;
       return;
     }
     try {
-      const response = await fetch(`/api/bots/${encodeURIComponent(chat.id)}`, {
+      const response = await fetch(`/api/bots/${encodeURIComponent(botId)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name: next }),
@@ -304,10 +431,10 @@ export function BotShell({
         ),
       );
       setChat((current) =>
-        current.id === body.id ? { ...current, name: body.name } : current,
+        current?.id === body.id ? { ...current, name: body.name } : current,
       );
       renameGeneration.current += 1;
-      setRenaming(false);
+      setEditingId((id) => (id === botId ? undefined : id));
       setShellError(undefined);
     } catch (error) {
       if (generation !== renameGeneration.current) return;
@@ -318,6 +445,49 @@ export function BotShell({
       );
     } finally {
       renameLock.current = false;
+    }
+  }
+
+  async function confirmDelete() {
+    const target = pendingDelete;
+    if (target === undefined || deleting) return;
+    setDeleting(true);
+    setDeleteError(undefined);
+    try {
+      const response = await fetch(
+        `/api/bots/${encodeURIComponent(target.id)}`,
+        { method: "DELETE" },
+      );
+      const body: unknown = await response.json().catch(() => undefined);
+      if (!response.ok || !isDeleted(body)) {
+        throw new Error(messageFrom(body, "The bot could not be deleted."));
+      }
+      const index = bots.findIndex((bot) => bot.id === target.id);
+      const next = index < 0 ? undefined : (bots[index + 1] ?? bots[index - 1]);
+      const wasOpen = chat?.id === target.id;
+      if (editingId === target.id) {
+        renameGeneration.current += 1;
+        setEditingId(undefined);
+      }
+      setBots((list) => list.filter((bot) => bot.id !== target.id));
+      setPendingDelete(undefined);
+      if (!wasOpen) return;
+      if (next !== undefined && next.id !== target.id) {
+        const opened = await openBot(next.id);
+        if (!opened) {
+          setChat((current) => (current?.id === target.id ? null : current));
+        }
+        return;
+      }
+      setChat((current) => (current?.id === target.id ? null : current));
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error
+          ? error.message
+          : "The bot could not be deleted.",
+      );
+    } finally {
+      setDeleting(false);
     }
   }
 }
@@ -337,6 +507,13 @@ function isSummary(value: unknown): value is BotSummary {
   if (typeof value !== "object" || value === null) return false;
   const bot = value as Partial<BotSummary>;
   return typeof bot.id === "string" && typeof bot.name === "string";
+}
+
+function isDeleted(value: unknown): value is { deleted: string } {
+  if (typeof value !== "object" || value === null || !("deleted" in value)) {
+    return false;
+  }
+  return typeof value.deleted === "string";
 }
 
 function messageFrom(value: unknown, fallback: string): string {
