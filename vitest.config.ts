@@ -6,6 +6,7 @@ export default defineConfig({
       "apps/daemon/**/*.test.ts",
       "packages/shared/**/*.test.ts",
       "apps/web/**/*.test.ts",
+      "infra/**/*.test.ts",
     ],
   },
 });
