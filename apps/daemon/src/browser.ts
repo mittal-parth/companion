@@ -135,7 +135,13 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
           "--disable-renderer-backgrounding",
           "--disable-background-timer-throttling",
           "--disable-features=CalculateNativeWinOcclusion",
-          ...(process.getuid?.() === 0 ? ["--no-sandbox"] : []),
+          // Chrome's own sandbox needs namespaces that a container's default
+          // seccomp profile blocks. The image says so with this variable and
+          // relies on the container and the VM instead (the VM is the boundary).
+          ...(process.getuid?.() === 0 ||
+          process.env.COMPANION_CHROME_SANDBOX === "off"
+            ? ["--no-sandbox"]
+            : []),
           "about:blank",
         ],
         { env, stdio: "ignore", detached: true },
