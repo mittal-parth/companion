@@ -87,6 +87,12 @@ export type DaemonOptions = {
   storePath: string;
   /** `0` asks the operating system for a free port. */
   port?: number;
+  /**
+   * Address to listen on. Defaults to `127.0.0.1`. A container sets `0.0.0.0`
+   * so its published port reaches the daemon, and the host decides who can
+   * reach that port.
+   */
+  host?: string;
   /** Replaces OpenCode. Tests pass one that scripts a turn. */
   engine?: Engine;
   opencodeBin?: string;
@@ -208,7 +214,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   try {
     await new Promise<void>((resolveListen, rejectListen) => {
       server.once("error", rejectListen);
-      server.listen(options.port ?? 0, "127.0.0.1", () => {
+      server.listen(options.port ?? 0, options.host ?? "127.0.0.1", () => {
         resolveListen();
       });
     });
@@ -328,6 +334,11 @@ async function handle(
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const parts = url.pathname.split("/").filter((part) => part !== "");
+  // Lets an image check, and a supervisor, see that the daemon is up.
+  if (parts.length === 1 && parts[0] === "health" && req.method === "GET") {
+    sendJson(res, 200, { status: "ok" });
+    return;
+  }
   if (parts[0] === "agent" && parts[1] === "schedules") {
     await handleAgentSchedules(req, res, handler, parts.slice(2));
     return;
