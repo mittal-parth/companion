@@ -19,3 +19,9 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm check
       - run: pnpm smoke
+      # Synthesis needs no AWS login: the zones are named, not looked up.
+      - run: pnpm --filter @companion/infra exec cdk synth --quiet --no-lookups
+        env:
+          AWS_REGION: ap-south-1
+          CDK_DEFAULT_ACCOUNT: "123456789012"
+          COMPANION_ALERT_EMAIL: ci@example.com
