@@ -5,6 +5,9 @@
   "exports": {
     ".": "./src/relay.ts"
   },
+  "scripts": {
+    "mint-token": "node scripts/mint-token.ts"
+  },
   "dependencies": {
     "@companion/shared": "workspace:*",
     "ws": "^8.23.0"

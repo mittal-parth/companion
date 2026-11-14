@@ -9,5 +9,7 @@ export default defineConfig({
       "apps/relay/**/*.test.ts",
       "infra/**/*.test.ts",
     ],
+    // `cdk synth` stages a copy of the repo here as the relay's build input.
+    exclude: ["**/node_modules/**", "infra/cdk.out/**"],
   },
 });
