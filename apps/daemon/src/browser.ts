@@ -241,7 +241,9 @@ async function debuggingPort(
   chrome: ChildProcess,
 ): Promise<number> {
   const file = join(profile, "DevToolsActivePort");
-  const deadline = Date.now() + 30_000;
+  // The first start on a machine made from an image reads Chrome from a disk
+  // that is still filling in, which can take well over 30 seconds.
+  const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
     if (chrome.exitCode !== null || chrome.signalCode !== null) {
       throw new Error(

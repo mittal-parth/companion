@@ -41,15 +41,15 @@ for candidate in $(lsblk -dno NAME,TYPE | awk '$2=="disk"{print $1}'); do
   break
 done
 [ -n "$device" ] || { echo "No data disk is attached." >&2; exit 1; }
-if ! blkid -o value -s LABEL "$device" | grep -qx companion-data; then
+if ! blkid -o value -s LABEL "$device" | grep -qx companion; then
   if [ -n "$(blkid -o value -s TYPE "$device" || true)" ]; then
     echo "$device holds a filesystem that is not ours. Refusing to format it." >&2
     exit 1
   fi
-  mkfs.xfs -L companion-data "$device"
+  mkfs.xfs -L companion "$device"
 fi
 mkdir -p /data
-mountpoint -q /data || mount LABEL=companion-data /data
+mountpoint -q /data || mount LABEL=companion /data
 chown 1000:1000 /data
 SCRIPT
 chmod 0755 /usr/local/sbin/companion-prepare-data

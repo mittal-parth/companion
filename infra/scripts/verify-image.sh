@@ -12,7 +12,15 @@ set -euo pipefail
 AMI="${1:?Usage: verify-image.sh <ami-id>}"
 region="${AWS_REGION:-$(aws configure get region)}"
 export AWS_DEFAULT_REGION="$region"
-fail() { echo "FAIL: $*" >&2; exit 1; }
+fail() {
+  echo "FAIL: $*" >&2
+  # What the machine says about itself, so a failure can be understood after it is deleted.
+  if [ -n "${instance:-}" ] && [ "${online:-}" = Online ]; then
+    run_on_instance "systemctl status companion-data companion --no-pager -l | tail -40; journalctl -u companion-data -u companion --no-pager | tail -40; lsblk; docker ps -a" \
+      | jq -r .StandardOutputContent >&2 || true
+  fi
+  exit 1
+}
 ok() { echo "ok: $*"; }
 
 # 1. The launch settings every user VM gets.

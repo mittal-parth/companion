@@ -20,5 +20,7 @@ done
 docker exec companion-test curl -fsS localhost:3010/health
 echo
 # Chrome and a desktop app, not only the health route.
-docker exec companion-test tsx scripts/smoke-stack.ts
+# A second try is allowed: the first start of Chrome reads a disk that is still filling in.
+docker exec companion-test tsx scripts/smoke-stack.ts \
+  || { echo "retrying once"; docker exec companion-test tsx scripts/smoke-stack.ts; }
 echo "host ok"
