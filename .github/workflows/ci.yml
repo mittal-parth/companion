@@ -25,6 +25,7 @@ jobs:
           AWS_REGION: ap-south-1
           CDK_DEFAULT_ACCOUNT: "123456789012"
           COMPANION_ALERT_EMAIL: ci@example.com
+          COMPANION_RELAY_DOMAIN: relay.example.com
           COMPANION_IMAGE_REF: ghcr.io/ci/companion@sha256:0000000000000000000000000000000000000000000000000000000000000000
 
   # Builds the container image on an arm64 runner (the image is arm64 only),

@@ -14,6 +14,9 @@ const config: InfraConfig = {
   budgetUsd: 20,
   alertEmail: "ops@example.com",
   imageRef: `ghcr.io/example/companion@sha256:${"a".repeat(64)}`,
+  relayDomain: "relay.example.com",
+  // A registry image, so synthesis in tests does not stage the repo as an asset.
+  relayImageRef: `ghcr.io/example/relay@sha256:${"b".repeat(64)}`,
 };
 
 function templates() {
@@ -27,6 +30,8 @@ function templates() {
     roles: get("CompanionVmRoles"),
     budget: get("CompanionBudget"),
     image: get("CompanionVmImage"),
+    relayCert: get("CompanionRelayCert"),
+    relay: get("CompanionRelay"),
   };
 }
 
@@ -279,5 +284,98 @@ describe("image reference", () => {
     expect(
       loadConfig({ ...base, COMPANION_IMAGE_REF: config.imageRef }).imageRef,
     ).toBe(config.imageRef);
+  });
+});
+
+describe("relay", () => {
+  it("is built only when a relay domain is configured", () => {
+    const app = buildApp({ ...config, relayDomain: undefined });
+    expect(app.node.tryFindChild("CompanionRelay")).toBeUndefined();
+    expect(app.node.tryFindChild("CompanionRelayCert")).toBeUndefined();
+  });
+
+  it("proves the certificate by DNS, so the operator adds the record", () => {
+    templates().relayCert.hasResourceProperties(
+      "AWS::CertificateManager::Certificate",
+      { DomainName: "relay.example.com", ValidationMethod: "DNS" },
+    );
+  });
+
+  it("serves HTTPS, redirects HTTP, and keeps long streams open", () => {
+    const { relay } = templates();
+    relay.hasResourceProperties("AWS::ElasticLoadBalancingV2::Listener", {
+      Port: 443,
+      Protocol: "HTTPS",
+    });
+    relay.hasResourceProperties("AWS::ElasticLoadBalancingV2::Listener", {
+      Port: 80,
+      DefaultActions: [
+        {
+          Type: "redirect",
+          RedirectConfig: {
+            Protocol: "HTTPS",
+            Port: "443",
+            StatusCode: "HTTP_301",
+          },
+        },
+      ],
+    });
+    relay.hasResourceProperties("AWS::ElasticLoadBalancingV2::LoadBalancer", {
+      Scheme: "internet-facing",
+      LoadBalancerAttributes: [
+        { Key: "deletion_protection.enabled", Value: "false" },
+        { Key: "idle_timeout.timeout_seconds", Value: "3600" },
+      ],
+    });
+  });
+
+  it("lets the task be reached by the load balancer only", () => {
+    const { relay } = templates();
+    // No inbound rule on any group names an address range except the balancer's own.
+    const groups = relay.findResources("AWS::EC2::SecurityGroup");
+    const open = Object.entries(groups).filter(([, g]) =>
+      (g.Properties.SecurityGroupIngress ?? []).some(
+        (rule: { CidrIp?: string }) => rule.CidrIp === "0.0.0.0/0",
+      ),
+    );
+    expect(open).toHaveLength(1);
+    expect(open[0]?.[0]).toMatch(/Balancer/);
+    relay.hasResourceProperties("AWS::EC2::SecurityGroupIngress", {
+      IpProtocol: "tcp",
+      FromPort: 8080,
+      ToPort: 8080,
+    });
+    relay.resourceCountIs("AWS::EC2::NatGateway", 0);
+  });
+
+  it("runs one arm64 task and passes the secret by reference, not by value", () => {
+    const { relay } = templates();
+    relay.hasResourceProperties("AWS::ECS::Service", { DesiredCount: 1 });
+    relay.hasResourceProperties("AWS::ECS::TaskDefinition", {
+      RuntimePlatform: { CpuArchitecture: "ARM64" },
+    });
+    const [task] = Object.values(
+      relay.findResources("AWS::ECS::TaskDefinition"),
+    );
+    const container = task!.Properties.ContainerDefinitions[0];
+    expect(JSON.stringify(container.Environment)).not.toContain("RELAY_SECRET");
+    expect(container.Secrets).toHaveLength(1);
+    expect(container.Secrets[0].Name).toBe("RELAY_SECRET");
+    relay.hasResourceProperties("AWS::SecretsManager::Secret", {
+      GenerateSecretString: { PasswordLength: 48, ExcludePunctuation: true },
+    });
+  });
+});
+
+describe("relay config", () => {
+  it("refuses a relay image that is not pinned by digest", () => {
+    expect(() =>
+      loadConfig({
+        CDK_DEFAULT_ACCOUNT: "111111111111",
+        COMPANION_ALERT_EMAIL: "ops@example.com",
+        COMPANION_IMAGE_REF: config.imageRef,
+        COMPANION_RELAY_IMAGE_REF: "ghcr.io/example/relay:latest",
+      }),
+    ).toThrow(/digest/);
   });
 });

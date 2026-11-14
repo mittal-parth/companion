@@ -20,6 +20,16 @@ export type InfraConfig = {
    * such as `ghcr.io/<owner>/companion@sha256:<digest>`. CI prints it.
    */
   imageRef: string;
+  /**
+   * The name the relay is served at, such as `relay.example.com`. The relay
+   * stacks exist only when this is set, so a laptop-only setup needs none.
+   */
+  relayDomain?: string;
+  /**
+   * A relay image already in a registry the cluster can pull from, pinned by
+   * digest. When unset, `cdk deploy` builds the image from this repo.
+   */
+  relayImageRef?: string;
 };
 
 /** Tag every user VM carries so roles can be limited to those instances. */
@@ -50,6 +60,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): InfraConfig {
       "Set COMPANION_IMAGE_REF to the image pinned by digest (name@sha256:...).",
     );
   }
+  const relayDomain = env.COMPANION_RELAY_DOMAIN?.trim() || undefined;
+  const relayImageRef = env.COMPANION_RELAY_IMAGE_REF?.trim() || undefined;
+  if (relayImageRef && !/@sha256:[0-9a-f]{64}$/.test(relayImageRef)) {
+    throw new Error(
+      "COMPANION_RELAY_IMAGE_REF must be pinned by digest (name@sha256:...).",
+    );
+  }
   return {
     vmAccountId,
     controlPlaneAccountId:
@@ -58,5 +75,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): InfraConfig {
     budgetUsd,
     alertEmail,
     imageRef,
+    relayDomain,
+    relayImageRef,
   };
 }
