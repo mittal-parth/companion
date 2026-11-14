@@ -34,6 +34,30 @@ const hello: acp.SessionUpdate = {
   content: { type: "text", text: "hello" },
 };
 
+test("the health route answers without any bot", async () => {
+  await withDaemon(scripted([]), async (daemon) => {
+    const response = await fetch(`${daemon.url}/health`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "ok" });
+  });
+});
+
+test("the daemon listens where it is told to", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "companion-host-"));
+  const daemon = await startDaemon({
+    storePath: join(directory, "threads.db"),
+    engine: scripted([]),
+    host: "0.0.0.0",
+  });
+  try {
+    // 0.0.0.0 accepts connections on loopback too.
+    expect((await fetch(`${daemon.url}/health`)).status).toBe(200);
+  } finally {
+    await daemon.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("creating a bot starts its one conversation", async () => {
   await withDaemon(
     scripted([{ updates: [hello], stopReason: "end_turn" }]),

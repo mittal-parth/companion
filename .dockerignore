@@ -1,0 +1,22 @@
+# Nothing from a developer's machine goes into the image: no secrets, no
+# session state, no host-built dependencies. The image is public.
+.git
+**/node_modules
+.env
+.env.*
+**/.env
+**/.env.*
+e2e/.auth
+test-results
+playwright-report
+blob-report
+coverage
+dist
+.next
+**/.next
+infra/cdk.out
+infra/cdk.context.json
+cdk.out
+.pnpm-store
+.DS_Store
+docs

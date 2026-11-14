@@ -13,6 +13,7 @@ const config: InfraConfig = {
   region: "ap-south-1",
   budgetUsd: 20,
   alertEmail: "ops@example.com",
+  imageRef: `ghcr.io/example/companion@sha256:${"a".repeat(64)}`,
 };
 
 function templates() {
@@ -25,6 +26,7 @@ function templates() {
     network: get("CompanionVmNetwork"),
     roles: get("CompanionVmRoles"),
     budget: get("CompanionBudget"),
+    image: get("CompanionVmImage"),
   };
 }
 
@@ -147,6 +149,7 @@ describe("loadConfig", () => {
   const base = {
     CDK_DEFAULT_ACCOUNT: "111111111111",
     COMPANION_ALERT_EMAIL: "a@b.co",
+    COMPANION_IMAGE_REF: config.imageRef,
   };
 
   it("uses one account for both roles until told otherwise", () => {
@@ -164,5 +167,117 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...base, COMPANION_BUDGET_USD: "-5" })).toThrow(
       /positive/,
     );
+  });
+});
+
+describe("VM image", () => {
+  it("launches user VMs with metadata v2 only and no instance role", () => {
+    const { image } = templates();
+    const [template] = Object.values(
+      image.findResources("AWS::EC2::LaunchTemplate"),
+    );
+    const data = template!.Properties.LaunchTemplateData;
+    expect(data.MetadataOptions.HttpTokens).toBe("required");
+    expect(data.MetadataOptions.HttpPutResponseHopLimit).toBe(1);
+    expect(data.IamInstanceProfile).toBeUndefined();
+  });
+
+  it("keeps user data on a separate disk that outlives the machine", () => {
+    const { image } = templates();
+    const [template] = Object.values(
+      image.findResources("AWS::EC2::LaunchTemplate"),
+    );
+    const disks = template!.Properties.LaunchTemplateData
+      .BlockDeviceMappings as {
+      DeviceName: string;
+      Ebs: Record<string, unknown>;
+    }[];
+    const data = disks.find((disk) => disk.DeviceName === "/dev/sdf");
+    expect(data?.Ebs.DeleteOnTermination).toBe(false);
+    expect(data?.Ebs.Encrypted).toBe(true);
+    expect(
+      disks.find((disk) => disk.DeviceName === "/dev/sda1")?.Ebs
+        .DeleteOnTermination,
+    ).toBe(true);
+  });
+
+  it("tags every user VM and its disks so roles can find them", () => {
+    const { image } = templates();
+    image.hasResourceProperties("AWS::EC2::LaunchTemplate", {
+      LaunchTemplateData: {
+        TagSpecifications: [
+          {
+            ResourceType: "instance",
+            Tags: [{ Key: "companion:managed", Value: "true" }],
+          },
+          {
+            ResourceType: "volume",
+            Tags: [{ Key: "companion:managed", Value: "true" }],
+          },
+        ],
+      },
+    });
+  });
+
+  it("uses the empty firewall, never a new one with inbound rules", () => {
+    const { image } = templates();
+    image.resourceCountIs("AWS::EC2::SecurityGroup", 0);
+    image.resourceCountIs("AWS::EC2::SecurityGroupIngress", 0);
+  });
+
+  it("builds on Ubuntu 24.04 arm64 and runs the host test before publishing", () => {
+    const { image } = templates();
+    image.hasResourceProperties("AWS::ImageBuilder::ImageRecipe", {
+      ParentImage:
+        "arn:aws:imagebuilder:ap-south-1:aws:image/ubuntu-server-24-lts-arm64/x.x.x",
+    });
+    image.hasResourceProperties("AWS::ImageBuilder::ImagePipeline", {
+      ImageTestsConfiguration: { ImageTestsEnabled: true },
+    });
+    image.resourceCountIs("AWS::ImageBuilder::Component", 2);
+  });
+
+  it("writes each component as a list of named phases, as Image Builder requires", () => {
+    const components = Object.values(
+      templates().image.findResources("AWS::ImageBuilder::Component"),
+    );
+    expect(components).toHaveLength(2);
+    for (const kind of ["build", "test"]) {
+      const component = components.find((resource) =>
+        String(resource.Properties.Name).includes(`-${kind}-`),
+      );
+      expect(String(component?.Properties.Data)).toContain(
+        `phases:\n  - name: ${kind}\n    steps:\n`,
+      );
+    }
+  });
+
+  it("builds on the build machine's profile and no other", () => {
+    templates().image.hasResourceProperties(
+      "AWS::ImageBuilder::InfrastructureConfiguration",
+      { InstanceProfileName: "companion-image-builder" },
+    );
+  });
+});
+
+describe("image reference", () => {
+  const base = {
+    CDK_DEFAULT_ACCOUNT: "111111111111",
+    COMPANION_ALERT_EMAIL: "ops@example.com",
+  };
+
+  it("refuses an image that is not pinned by digest", () => {
+    expect(() =>
+      loadConfig({
+        ...base,
+        COMPANION_IMAGE_REF: "ghcr.io/example/companion:latest",
+      }),
+    ).toThrow(/digest/);
+  });
+
+  it("accepts an image pinned by digest", () => {
+    expect(
+      loadConfig({ ...base, COMPANION_IMAGE_REF: config.imageRef }).imageRef,
+    ).toBe(config.imageRef);
   });
 });
