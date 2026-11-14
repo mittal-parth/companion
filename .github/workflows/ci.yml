@@ -58,7 +58,7 @@ jobs:
           docker exec companion curl -fsS localhost:3010/health
           docker exec companion tsx scripts/smoke-stack.ts
       - name: Scan the image for secrets
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: companion-daemon:ci
           scanners: secret
