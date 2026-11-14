@@ -197,6 +197,10 @@ importers:
       open-bot-avatar:
         specifier: 0.2.1
         version: 0.2.1
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.2
+        version: 24.19.2
 
 packages:
 
