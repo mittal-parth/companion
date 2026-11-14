@@ -3,7 +3,8 @@
  *
  * The page loads the transcript. POST /api/chat sends a message. GET
  * /api/chat/[id]/stream rejoins a turn that is still running. Those three
- * callers all use this file. They call the daemon's existing /bots API.
+ * callers all use this file. They call the daemon's existing /bots API,
+ * directly on a local computer or through the relay in the cloud.
  * /api/health is the app's own health check, and it does not use this file.
  */
 import type { BotAvatar, BotTranscript, BotView } from "@companion/shared";
@@ -13,6 +14,7 @@ import {
   type AttachedImage,
   type TurnEvent,
 } from "@companion/shared/protocol";
+import { signToken } from "@companion/shared/tunnel";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import type { UIMessage } from "ai";
 import {
@@ -21,13 +23,42 @@ import {
   transcriptToMessages,
 } from "./converter";
 
-/** Where the daemon is listening. Set for the web process, not the browser. */
-export function daemonUrl(): string {
-  const url = process.env.COMPANION_DAEMON_URL?.trim();
-  if (url == null || url === "") {
-    throw new Error("Set COMPANION_DAEMON_URL to the local daemon.");
+/**
+ * How this web server reaches the daemon: straight to its address (a local or
+ * self-hosted computer), or through the relay to one VM (the cloud).
+ */
+type DaemonTarget =
+  | { mode: "direct"; url: string }
+  | { mode: "relay"; url: string; vm: string; secret: string };
+
+/**
+ * Reads the target from the environment of the web process, not the browser.
+ * Setting both ways at once is refused rather than guessed at.
+ */
+function daemonTarget(): DaemonTarget {
+  const read = (name: string) => (process.env[name] ?? "").trim();
+  const direct = read("COMPANION_DAEMON_URL");
+  const relay = read("COMPANION_RELAY_URL");
+  if (direct !== "" && relay !== "") {
+    throw new Error(
+      "Set COMPANION_DAEMON_URL or COMPANION_RELAY_URL, not both.",
+    );
   }
-  return url.replace(/\/$/, "");
+  if (relay === "") {
+    if (direct === "") {
+      throw new Error("Set COMPANION_DAEMON_URL to the local daemon.");
+    }
+    return { mode: "direct", url: direct.replace(/\/$/, "") };
+  }
+  // Until accounts own VMs (Task 4.4), one VM is named in the environment.
+  const vm = read("COMPANION_RELAY_VM");
+  const secret = read("COMPANION_RELAY_SECRET");
+  if (vm === "" || secret === "") {
+    throw new Error(
+      "COMPANION_RELAY_URL needs COMPANION_RELAY_VM and COMPANION_RELAY_SECRET.",
+    );
+  }
+  return { mode: "relay", url: relay.replace(/\/$/, ""), vm, secret };
 }
 
 /**
@@ -198,19 +229,32 @@ export function messageForDaemon(message: UIMessage): {
 }
 
 async function daemonJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${daemonUrl()}${path}`);
+  const response = await daemonFetch(path);
   if (!response.ok) {
     throw new Error(await daemonError(response));
   }
   return (await response.json()) as T;
 }
 
-/** Opens the daemon route that streams a turn. The caller owns the response. */
+/**
+ * Calls a daemon route, directly or through the relay, and returns the
+ * response as the daemon sent it. The caller owns a streaming response. A relay
+ * call carries a token that names the VM and lasts a minute: it is checked when
+ * the request arrives, so a long stream is not cut off when it expires.
+ */
 export function daemonFetch(
   path: string,
   init?: RequestInit,
 ): Promise<Response> {
-  return fetch(`${daemonUrl()}${path}`, init);
+  const target = daemonTarget();
+  if (target.mode === "direct") return fetch(`${target.url}${path}`, init);
+  const headers = new Headers(init?.headers);
+  const exp = Math.floor(Date.now() / 1000) + 60;
+  headers.set(
+    "authorization",
+    `Bearer ${signToken({ role: "web", vm: target.vm, exp }, target.secret)}`,
+  );
+  return fetch(`${target.url}${path}`, { ...init, headers });
 }
 
 /** The error text from a daemon response that was not a stream. */
