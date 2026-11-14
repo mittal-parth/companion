@@ -15,6 +15,11 @@ export type InfraConfig = {
   budgetUsd: number;
   /** Who is emailed by the budget alarm. The operator, never an end user. */
   alertEmail: string;
+  /**
+   * The container image baked into the machine image, pinned by digest,
+   * such as `ghcr.io/<owner>/companion@sha256:<digest>`. CI prints it.
+   */
+  imageRef: string;
 };
 
 /** Tag every user VM carries so roles can be limited to those instances. */
@@ -39,6 +44,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): InfraConfig {
   if (!Number.isFinite(budgetUsd) || budgetUsd <= 0) {
     throw new Error("COMPANION_BUDGET_USD must be a positive number.");
   }
+  const imageRef = env.COMPANION_IMAGE_REF?.trim();
+  if (!imageRef || !/@sha256:[0-9a-f]{64}$/.test(imageRef)) {
+    throw new Error(
+      "Set COMPANION_IMAGE_REF to the image pinned by digest (name@sha256:...).",
+    );
+  }
   return {
     vmAccountId,
     controlPlaneAccountId:
@@ -46,5 +57,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): InfraConfig {
     region: env.CDK_DEFAULT_REGION?.trim() || "ap-south-1",
     budgetUsd,
     alertEmail,
+    imageRef,
   };
 }

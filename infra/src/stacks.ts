@@ -10,6 +10,11 @@ import * as cdk from "aws-cdk-lib";
 import * as budgets from "aws-cdk-lib/aws-budgets";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as imagebuilder from "aws-cdk-lib/aws-imagebuilder";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Construct } from "constructs";
 import { type InfraConfig, managedTag } from "./config.js";
 
@@ -234,12 +239,157 @@ export class BudgetStack extends cdk.Stack {
   }
 }
 
+const imageDir = join(dirname(fileURLToPath(import.meta.url)), "../image");
+
+/**
+ * The machine image a user VM boots from, and the launch settings that make
+ * every user VM safe: metadata v2 only, no instance role, the empty firewall,
+ * and a separate data disk that outlives the machine.
+ *
+ * Image Builder starts a temporary machine, runs `infra/image/install-host.sh`
+ * (Docker, no remote login, the container image pulled by digest), then runs
+ * `test-host.sh` on a second machine and publishes the AMI only if that passes.
+ * The scripts are plain shell, so they can be tried by hand first.
+ */
+export class VmImageStack extends cdk.Stack {
+  readonly launchTemplate: ec2.CfnLaunchTemplate;
+  readonly pipeline: imagebuilder.CfnImagePipeline;
+
+  constructor(
+    scope: Construct,
+    id: string,
+    props: cdk.StackProps & { config: InfraConfig; network: VmNetwork },
+  ) {
+    super(scope, id, props);
+    const { config, network } = props;
+    const install = readFileSync(join(imageDir, "install-host.sh"), "utf8");
+    const verify = readFileSync(join(imageDir, "test-host.sh"), "utf8");
+    // A changed script makes a new component, because a published one is immutable.
+    const tag = createHash("sha256")
+      .update(install)
+      .update(verify)
+      .update(config.imageRef)
+      .digest("hex")
+      .slice(0, 8);
+
+    const component = (
+      kind: "build" | "test",
+      script: string,
+      args: string,
+    ): imagebuilder.CfnComponent =>
+      new imagebuilder.CfnComponent(this, `${kind}Component`, {
+        name: `companion-host-${kind}-${tag}`,
+        version: "1.0.0",
+        platform: "Linux",
+        description: `Companion host image: ${kind}.`,
+        data: [
+          "schemaVersion: 1.0",
+          "phases:",
+          `  ${kind === "build" ? "build" : "test"}:`,
+          "    steps:",
+          `      - name: ${kind}Host`,
+          "        action: ExecuteBash",
+          "        inputs:",
+          "          commands:",
+          `            - echo ${Buffer.from(script).toString("base64")} | base64 -d > /tmp/${kind}-host.sh`,
+          `            - bash /tmp/${kind}-host.sh${args}`,
+        ].join("\n"),
+      });
+    const build = component("build", install, ` ${config.imageRef}`);
+    const check = component("test", verify, "");
+
+    const recipe = new imagebuilder.CfnImageRecipe(this, "Recipe", {
+      name: `companion-host-${tag}`,
+      version: "1.0.0",
+      parentImage: `arn:aws:imagebuilder:${this.region}:aws:image/ubuntu-server-24-lts-arm64/x.x.x`,
+      components: [
+        { componentArn: build.attrArn },
+        { componentArn: check.attrArn },
+      ],
+      blockDeviceMappings: [
+        {
+          deviceName: "/dev/sda1",
+          ebs: { volumeSize: 20, volumeType: "gp3", deleteOnTermination: true },
+        },
+      ],
+    });
+    const infrastructure = new imagebuilder.CfnInfrastructureConfiguration(
+      this,
+      "Infrastructure",
+      {
+        name: "companion-image-build",
+        instanceProfileName: "companion-image-builder",
+        instanceTypes: ["t4g.medium"],
+        subnetId: network.vpc.publicSubnets[0]!.subnetId,
+        securityGroupIds: [network.securityGroup.securityGroupId],
+        // The build machine is deleted whether or not the build worked.
+        terminateInstanceOnFailure: true,
+      },
+    );
+    this.pipeline = new imagebuilder.CfnImagePipeline(this, "Pipeline", {
+      name: "companion-host",
+      imageRecipeArn: recipe.attrArn,
+      infrastructureConfigurationArn: infrastructure.attrArn,
+      // Run by hand. A schedule for monthly OS patches comes with Task 4.5a.
+      status: "ENABLED",
+      imageTestsConfiguration: { imageTestsEnabled: true, timeoutMinutes: 60 },
+    });
+
+    // The settings every user VM launches with. The image id is supplied at launch.
+    this.launchTemplate = new ec2.CfnLaunchTemplate(this, "LaunchTemplate", {
+      launchTemplateName: "companion-user-vm",
+      launchTemplateData: {
+        instanceType: "t4g.medium",
+        // Metadata v2 only, and one hop so a container cannot reach it either.
+        metadataOptions: {
+          httpTokens: "required",
+          httpPutResponseHopLimit: 1,
+          httpEndpoint: "enabled",
+        },
+        // No `iamInstanceProfile`: a user VM holds no AWS credentials.
+        securityGroupIds: [network.securityGroup.securityGroupId],
+        blockDeviceMappings: [
+          {
+            deviceName: "/dev/sda1",
+            ebs: {
+              volumeSize: 20,
+              volumeType: "gp3",
+              encrypted: true,
+              deleteOnTermination: true,
+            },
+          },
+          // The user's data. It survives the machine, so replacing the root
+          // disk or the instance never loses a bot.
+          {
+            deviceName: "/dev/sdf",
+            ebs: {
+              volumeSize: 30,
+              volumeType: "gp3",
+              encrypted: true,
+              deleteOnTermination: false,
+            },
+          },
+        ],
+        tagSpecifications: ["instance", "volume"].map((resourceType) => ({
+          resourceType,
+          tags: [{ key: managedTag.key, value: managedTag.value }],
+        })),
+      },
+    });
+    new cdk.CfnOutput(this, "PipelineArn", { value: this.pipeline.attrArn });
+    new cdk.CfnOutput(this, "LaunchTemplateId", {
+      value: this.launchTemplate.ref,
+    });
+  }
+}
+
 /** Builds all stacks for one config. Shared by the CDK entrypoint and the tests. */
 export function buildApp(config: InfraConfig): cdk.App {
   const app = new cdk.App();
   const env = { account: config.vmAccountId, region: config.region };
   const network = new VmNetworkStack(app, "CompanionVmNetwork", { env });
   new VmRolesStack(app, "CompanionVmRoles", { env, config, network });
+  new VmImageStack(app, "CompanionVmImage", { env, config, network });
   new BudgetStack(app, "CompanionBudget", { env, config });
   return app;
 }
