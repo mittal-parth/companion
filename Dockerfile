@@ -11,6 +11,7 @@ RUN corepack enable
 # Every workspace manifest is needed for the frozen lockfile to match.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/daemon/package.json apps/daemon/
+COPY apps/relay/package.json apps/relay/
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
 COPY infra/package.json infra/
