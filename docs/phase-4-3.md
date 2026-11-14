@@ -81,15 +81,192 @@ Run the daemon with `COMPANION_RELAY_URL=wss://relay.example.com` and the first 
 - Nothing slows a fast daemon for a slow reader. Chat events are small, so this does not matter yet; live view (Task 7.1) will need it.
 - The relay does not wake a stopped VM. That is Task 4.5.
 
+## Sequence diagrams
+
+The parties: the **browser**, the **web server** (Next.js, which checks the login), the **relay**, the **daemon** (its tunnel client plus its own HTTP API), and the **engine** (OpenCode).
+
+### 1. A VM connects, and stays connected
+
+```mermaid
+sequenceDiagram
+    participant D as Daemon (tunnel client)
+    participant R as Relay
+
+    D->>R: open websocket /vm with a vm token
+    alt token valid (signed, role vm, not expired)
+        R-->>D: connection accepted
+        Note over R: table: vm-1 is this socket
+        loop every 20 s
+            R->>D: ping
+            D-->>R: pong
+        end
+    else token missing, wrong role, bad signature or expired
+        R-->>D: 401, connection closed
+        Note over D: logs the refusal, retries after a delay
+    end
+
+    Note over D,R: The line drops (relay deploy, network, VM restart)
+    D->>D: in-flight requests aborted
+    D->>R: reconnect after 1 s, then 2 s, 4 s ... up to 30 s
+    R-->>D: accepted, the table points at the new socket
+
+    Note over D,R: Half-open line (nothing closes, nothing arrives)
+    R->>R: no pong for a full interval, terminate the socket
+    D->>D: no ping for 60 s, terminate and reconnect
+```
+
+### 2. A turn started from the web, success
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant W as Web server
+    participant R as Relay
+    participant D as Daemon
+    participant E as Engine
+
+    B->>W: POST /api/chat (signed-in session)
+    W->>W: sign a web token for vm-1, valid 60 s
+    W->>R: POST /bots/:id/messages + bearer web token
+    R->>R: verify token, find vm-1 in the table
+    R->>D: request frame (method, path, headers, base64 body)
+    D->>D: same request against its own local server
+    D->>E: session/prompt
+    D-->>R: response frame (200, event-stream)
+    R-->>W: status and headers
+    loop each session update
+        E-->>D: update (stored in SQLite first)
+        D-->>R: chunk frame
+        R-->>W: bytes written to the open response
+        W-->>B: AI SDK message stream
+    end
+    E-->>D: stop reason
+    D-->>R: end frame
+    R-->>W: response ends
+    W-->>B: stream ends
+```
+
+### 3. Requests the relay refuses or cannot deliver
+
+```mermaid
+sequenceDiagram
+    participant W as Web server
+    participant R as Relay
+    participant D as Daemon
+
+    W->>R: request with no token, a vm token, a forged or expired token
+    R-->>W: 401 Not authorized (nothing reaches any VM)
+
+    W->>R: request with a valid token for vm-2
+    Note over R: vm-2 is not in the table
+    R-->>W: 503 The VM is not connected
+
+    W->>R: request with a body over about 24 MB
+    R-->>W: 413 (nothing is sent to the VM)
+
+    W->>R: request for vm-1
+    R->>D: request frame
+    Note over D: the daemon's own server is not reachable
+    D-->>R: error frame
+    R-->>W: 502 with the message
+```
+
+### 4. Something drops while a request is open
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant W as Web server
+    participant R as Relay
+    participant D as Daemon
+
+    rect rgb(245, 245, 245)
+    Note over W,D: The VM drops before it answers
+    W->>R: request
+    R->>D: request frame
+    D--xR: socket closes
+    R-->>W: 502 The VM disconnected
+    end
+
+    rect rgb(245, 245, 245)
+    Note over W,D: The VM drops mid-stream
+    D-->>R: response frame and some chunks
+    R-->>W: partial stream
+    D--xR: socket closes
+    R--xW: response destroyed, the stream errors
+    end
+
+    rect rgb(245, 245, 245)
+    Note over B,D: The caller leaves (tab closed, fetch aborted)
+    B--xW: connection closed
+    W--xR: connection closed
+    R->>D: cancel frame
+    D->>D: aborts only that HTTP request
+    Note over D: the turn itself keeps running in the daemon
+    end
+```
+
+### 5. The relay restarts mid-turn, and the caller catches up
+
+The turn belongs to the daemon, and every update is stored before it is sent. So nothing is lost when the relay goes away. The caller asks for what it has not seen.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant W as Web server
+    participant R as Relay
+    participant D as Daemon
+    participant E as Engine
+
+    B->>W: send a message
+    W->>R: POST /bots/:id/messages
+    R->>D: request frame
+    D->>E: prompt
+    E-->>D: update 1 (stored)
+    D-->>R: chunk
+    R-->>W: chunk
+    W-->>B: first words appear
+
+    Note over R: relay restarts (a deploy)
+    R--xW: stream breaks
+    R--xD: socket closes
+    E-->>D: update 2, update 3, stop (all stored, turn finishes)
+    D->>D: reconnect, backing off from 1 s
+
+    D->>R: reconnected with its vm token
+    B->>W: page reloads or the client retries
+    W->>R: GET /bots/:id/events?from=1
+    R->>D: request frame
+    D-->>R: updates 1, 2, 3 and done, in order
+    R-->>W: stream
+    W-->>B: the full reply, each event once
+    Note over W,R: during the gap the relay answers 503, so the caller retries
+```
+
+### 6. One VM, two connections
+
+```mermaid
+sequenceDiagram
+    participant Old as Daemon socket A
+    participant R as Relay
+    participant New as Daemon socket B
+
+    Old->>R: connected as vm-1
+    New->>R: connects as vm-1 (the old line was half-open)
+    R->>Old: close with code 4000 replaced
+    Note over R: table: vm-1 is socket B
+    Note over R: closing A does not remove B, a newer socket is never forgotten
+```
+
 ## Checks
 
 ```bash
-pnpm exec vitest run packages/shared/src/tunnel.test.ts apps/relay apps/daemon/tests/tunnel.test.ts apps/daemon/tests/relay.test.ts apps/web/tests/daemon.test.ts infra
+pnpm exec vitest run packages/shared/src/tunnel.test.ts apps/relay apps/daemon/tests/tunnel.test.ts apps/daemon/tests/tunnel-relay.test.ts apps/web/tests/daemon.test.ts infra
 ```
 
 - `apps/relay/tests/relay.test.ts`: only a valid `web` token gets through, a token for one VM never reaches another's connection, a streamed answer comes back whole, a cancelled or dropped request is handled on both sides, and a silent VM is dropped.
 - `apps/daemon/tests/tunnel.test.ts`: the daemon answers, streams, stops on cancel, reconnects and stops reconnecting when closed.
-- `apps/daemon/tests/relay.test.ts`: a real daemon, the real relay and the real tunnel. A turn starts through the relay, the caller leaves, the relay restarts, and the full reply replays once the tunnel is back.
+- `apps/daemon/tests/tunnel-relay.test.ts`: a real daemon, the real relay and the real tunnel. A turn starts through the relay, the caller leaves, the relay restarts, and the full reply replays once the tunnel is back.
 - `infra/tests/stacks.test.ts`: DNS-validated certificate, HTTPS and the redirect, the long idle timeout, the task reachable from the balancer only, the secret passed by reference.
 
 The two container images were also run together on a local Docker network: the daemon image connected to the relay image, a request with a valid token read `/bots` through the tunnel, a missing token was 401, a token for another VM was 503, and restarting the relay container reconnected the daemon within a second.
