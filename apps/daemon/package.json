@@ -13,9 +13,11 @@
     "@companion/shared": "workspace:*",
     "agent-browser": "0.42.0",
     "agent-desktop": "1.2.0",
-    "croner": "^11.0.0"
+    "croner": "^11.0.0",
+    "ws": "^8.23.0"
   },
   "devDependencies": {
-    "@types/node": "^24.19.2"
+    "@types/node": "^24.19.2",
+    "@types/ws": "^8.18.2"
   }
 }

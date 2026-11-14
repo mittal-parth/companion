@@ -205,3 +205,20 @@ export function verifyToken(
 function mac(body: string, secret: string): string {
   return createHmac("sha256", secret).update(body).digest("base64url");
 }
+
+/** What the daemon needs to open its tunnel to the relay. */
+export type TunnelOptions = {
+  /** The relay's address, such as `wss://relay.example.com`. */
+  relayUrl: string;
+  /** The VM token to present. Asked for on every connect, so it can be renewed. */
+  token: () => string;
+  /** The daemon's own address, which forwarded requests are made against. */
+  target: string;
+  /** Called with a line about connects, drops and refused frames. */
+  log?: (line: string) => void;
+};
+
+/** A running tunnel. `close` stops it for good and drops any request still in flight. */
+export type TunnelHandle = {
+  close(): void;
+};
