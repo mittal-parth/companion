@@ -1,6 +1,6 @@
-# Phase 4.2: the base image (so far)
+# Phase 4.2: the base image
 
-A user's VM needs everything a bot's computer runs. This task packages it once, so the cloud VM, a laptop and CI all run the same thing. The machine image and the CI push are not built yet. This page covers what exists.
+A user's VM needs everything a bot's computer runs. This task packages it once, so the cloud VM, a laptop and CI all run the same thing. It has two parts: a container image with everything we ship, and a thin machine image (AMI) that runs it.
 
 ## What the image holds
 
@@ -35,6 +35,52 @@ Docker's default seccomp profile blocks the namespaces Chrome's sandbox needs, s
 - The `live-test` Dockerfile stage adds the test runner, `ffmpeg` and a font, so the live tests (real Sarvam turns) run inside the image. The browser, desktop, schedule, web search, vision and two-bot tests pass there.
 - Replacing the container: a bot, its conversation, its files and the Chrome profile folder survive a different image on the same `/data`.
 
-## Still to do in this task
+## CI builds and publishes the container image
 
-CI build and push to GHCR by commit SHA with a secrets scan, the EC2 Image Builder stack and launch template (second volume, IMDSv2, no profile), and the `verify-image` script. How updates reach a VM is Task 4.5a.
+The `image` job in `.github/workflows/ci.yml` runs on an arm64 runner. It builds the image, starts it and runs the stack smoke check, scans it for secrets with Trivy, and, for pushes and same-repository pull requests, publishes it to `ghcr.io/<owner>/companion` tagged with the commit. The job summary prints the reference pinned by digest (`name@sha256:…`). The package is public, and an anonymous request for its manifest returns 200.
+
+## The machine image
+
+`infra/src/stacks.ts` has a `CompanionVmImage` stack. It holds an EC2 Image Builder pipeline and the launch template every user VM uses.
+
+- **Build.** The pipeline starts a temporary Ubuntu 24.04 arm64 machine and runs `infra/image/install-host.sh`. That installs Docker, removes the SSH server, turns on automatic security patches, pulls the container image **by digest**, and adds two services: one that formats and mounts the data disk at `/data`, and one that runs the container. The container publishes no port. The script is plain shell, so it can be run by hand on a test machine.
+- **Test before publishing.** A second machine runs `infra/image/test-host.sh`: the daemon is healthy on an empty data directory, and Chrome and a desktop app start. The AMI is published only if that passes.
+- **Launch template `companion-user-vm`.** Metadata v2 only with one hop, no instance profile, the empty firewall, a 20 GB encrypted root disk, and a 30 GB encrypted data disk at `/dev/sdf` that is **not** deleted when the machine is. Every machine and disk carries `companion:managed=true`.
+- **The data disk** is formatted once, on the first boot, with the label `companion` (XFS limits labels to 12 characters). A disk that already holds a different filesystem is never formatted. This is what lets the update flow (Task 4.5a) replace the machine without losing a bot.
+
+Changing a script, or the image reference, gives the components a new name, because a published component cannot change.
+
+## Running it
+
+CI prints the digest. Then, from the repository root:
+
+```
+export AWS_PROFILE=companion COMPANION_ALERT_EMAIL=you@example.com
+export COMPANION_IMAGE_REF=ghcr.io/<owner>/companion@sha256:<digest>
+pnpm --filter @companion/infra deploy
+aws imagebuilder start-image-pipeline-execution --image-pipeline-arn <PipelineArn from the stack outputs>
+infra/scripts/verify-image.sh <ami-id>
+```
+
+Deploying only this stack leaves the budget alarm alone: `cdk deploy --exclusively CompanionVmImage`.
+
+## `verify-image`
+
+`infra/scripts/verify-image.sh` launches the AMI the way a user VM launches, in the real network, and deletes it afterwards. It first reads the launch template: IMDSv2 required, no instance profile, a data disk that outlives the machine. It then launches the AMI and checks, with a temporary copy that gets the image builder's profile so SSM can run commands:
+
+- the running instance requires IMDSv2,
+- the daemon is healthy on a data disk that was empty at launch, and the disk is mounted and owned by the daemon,
+- Chrome and a desktop app start,
+- nothing listens on a non-loopback address, there is no SSH service, and the container's environment holds no key or token.
+
+A failed check prints the services' status and logs from the machine before it is deleted.
+
+## What the real runs found
+
+- The first launch failed because the data-disk label was 14 characters and XFS allows 12. The pipeline's own test used a plain folder as the data disk and could not see this. Only the launch check did.
+- One pipeline build failed because Chrome took more than 30 seconds to open its debugging port on a fresh machine. The first start reads Chrome from a disk that is still filling in from the snapshot. The daemon now waits 90 seconds, and the host test retries once. This is a likely cause, not a proven one.
+- A VM boots with no model key, so the daemon now starts without one and turns fail at the provider until the control plane supplies a key (Task 5.1).
+
+## Safety, and what is left for later
+
+The checks above run on every image. The VM stays the boundary, and Chrome's own sandbox is off (see above). How a running VM moves to a newer image is Task 4.5a, and a schedule for monthly OS patches comes with it.
