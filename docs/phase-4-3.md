@@ -117,6 +117,8 @@ sequenceDiagram
 
 ### 2. A turn started from the web, success
 
+The relay never connects to the VM. It writes onto the websocket the daemon opened in diagram 1, so every arrow between the relay and the daemon below travels over that one outbound connection (shown as a dashed box).
+
 ```mermaid
 sequenceDiagram
     participant B as Browser
@@ -125,28 +127,35 @@ sequenceDiagram
     participant D as Daemon
     participant E as Engine
 
+    Note over D,R: Already open: the daemon dialed out to the relay (diagram 1)
+
     B->>W: POST /api/chat (signed-in session)
     W->>W: sign a web token for vm-1, valid 60 s
     W->>R: POST /bots/:id/messages + bearer web token
-    R->>R: verify token, find vm-1 in the table
-    R->>D: request frame (method, path, headers, base64 body)
+    R->>R: verify token, find vm-1's socket in the table
+    rect rgba(120, 120, 120, 0.15)
+    Note over R,D: Everything in this box travels over the daemon's own outbound socket
+    R-->>D: request frame (method, path, headers, base64 body)
     D->>D: same request against its own local server
     D->>E: session/prompt
-    D-->>R: response frame (200, event-stream)
+    D->>R: response frame (200, event-stream)
+    end
     R-->>W: status and headers
     loop each session update
         E-->>D: update (stored in SQLite first)
-        D-->>R: chunk frame
+        D->>R: chunk frame, over the same socket
         R-->>W: bytes written to the open response
         W-->>B: AI SDK message stream
     end
     E-->>D: stop reason
-    D-->>R: end frame
+    D->>R: end frame
     R-->>W: response ends
     W-->>B: stream ends
 ```
 
 ### 3. Requests the relay refuses or cannot deliver
+
+As in diagram 2, a frame from the relay to the daemon is written onto the socket the daemon opened. The relay has no other way to reach it.
 
 ```mermaid
 sequenceDiagram
