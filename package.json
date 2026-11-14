@@ -10,7 +10,7 @@
     "dev": "pnpm --filter @companion/web dev",
     "lint": "eslint . && pnpm --filter @companion/web lint",
     "format:check": "prettier --check .",
-    "typecheck": "tsc -p apps/daemon --noEmit && tsc -p packages/shared --noEmit && tsc -p infra --noEmit && pnpm --filter @companion/web typecheck",
+    "typecheck": "tsc -p apps/daemon --noEmit && tsc -p apps/relay --noEmit && tsc -p packages/shared --noEmit && tsc -p infra --noEmit && pnpm --filter @companion/web typecheck",
     "test": "vitest run",
     "e2e": "pnpm --filter @companion/web build && pnpm exec playwright test",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm e2e",

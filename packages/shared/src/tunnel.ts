@@ -222,3 +222,23 @@ export type TunnelOptions = {
 export type TunnelHandle = {
   close(): void;
 };
+
+/** What the relay needs to start. */
+export type RelayOptions = {
+  port?: number;
+  host?: string;
+  /** The secret both token kinds are signed with. */
+  secret: string;
+  /** Called with a line about a VM connecting, dropping, or a request refused. */
+  log?: (line: string) => void;
+  /** How often each VM is pinged, in milliseconds. */
+  pingMs?: number;
+};
+
+/** A running relay. */
+export type RelayHandle = {
+  port: number;
+  /** The VMs connected right now. */
+  vms(): string[];
+  close(): Promise<void>;
+};

@@ -1,0 +1,16 @@
+{
+  "name": "@companion/relay",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/relay.ts"
+  },
+  "dependencies": {
+    "@companion/shared": "workspace:*",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/ws": "^8.18.2"
+  }
+}
