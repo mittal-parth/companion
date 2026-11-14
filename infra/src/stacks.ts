@@ -9,6 +9,8 @@
 import * as cdk from "aws-cdk-lib";
 import * as budgets from "aws-cdk-lib/aws-budgets";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as ecrAssets from "aws-cdk-lib/aws-ecr-assets";
+import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as imagebuilder from "aws-cdk-lib/aws-imagebuilder";
 import { createHash } from "node:crypto";
@@ -17,6 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Construct } from "constructs";
 import { type InfraConfig, managedTag } from "./config.js";
+import { RelayCertStack, RelayStack } from "./relay.js";
 
 /** The network a user VM is launched into. */
 export type VmNetwork = {
@@ -240,6 +243,8 @@ export class BudgetStack extends cdk.Stack {
 }
 
 const imageDir = join(dirname(fileURLToPath(import.meta.url)), "../image");
+/** The repo root, which the relay image is built from. */
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 /**
  * The machine image a user VM boots from, and the launch settings that make
@@ -391,5 +396,23 @@ export function buildApp(config: InfraConfig): cdk.App {
   new VmRolesStack(app, "CompanionVmRoles", { env, config, network });
   new VmImageStack(app, "CompanionVmImage", { env, config, network });
   new BudgetStack(app, "CompanionBudget", { env, config });
+  if (config.relayDomain !== undefined) {
+    const cert = new RelayCertStack(app, "CompanionRelayCert", {
+      env,
+      domain: config.relayDomain,
+    });
+    new RelayStack(app, "CompanionRelay", {
+      env,
+      domain: config.relayDomain,
+      certificate: cert.certificate,
+      image:
+        config.relayImageRef !== undefined
+          ? ecs.ContainerImage.fromRegistry(config.relayImageRef)
+          : ecs.ContainerImage.fromAsset(repoRoot, {
+              file: "apps/relay/Dockerfile",
+              platform: ecrAssets.Platform.LINUX_ARM64,
+            }),
+    });
+  }
   return app;
 }
