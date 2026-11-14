@@ -42,11 +42,13 @@ test.skipIf(!live)(
       const word = `marigold-${randomUUID().slice(0, 8)}`;
       writeFileSync(join(bot.directory, "note.txt"), `${word}\n`, "utf8");
 
+      const message =
+        "Read note.txt in the working directory with a file-reading tool, then reply with only the exact word in that file.";
       const response = await fetch(`${daemon.url}/bots/${bot.id}/messages`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          text: "Read note.txt in the working directory with a file-reading tool, then reply with only the exact word in that file.",
+          text: message,
         }),
       });
       expect(response.status).toBe(200);
@@ -69,7 +71,14 @@ test.skipIf(!live)(
       expect(transcript.updates.slice(0, opened.updates.length)).toEqual(
         opened.updates,
       );
-      expect(transcript.updates.slice(opened.updates.length)).toEqual(updates);
+      // The store keeps the person's message first, then what the bot streamed.
+      expect(transcript.updates.slice(opened.updates.length)).toEqual([
+        {
+          sessionUpdate: "user_message_chunk",
+          content: { type: "text", text: message },
+        },
+        ...updates,
+      ]);
     } finally {
       await daemon.close();
     }

@@ -23,8 +23,12 @@ RUN npm install --prefix /opt/tsx --no-audit --no-fund tsx@4.23.15
 COPY packages/shared packages/shared
 COPY apps/daemon apps/daemon
 
+# --- Dependencies for the live tests only, never in the shipped image ---
+FROM deps AS deps-dev
+RUN CI=true pnpm install --frozen-lockfile
+
 # --- The runtime image ---
-FROM ubuntu:24.04
+FROM ubuntu:24.04 AS runtime
 ARG OPENCODE_VERSION=2.2.6
 ARG OPENCODE_SHA256=f2d27600c367e45057d6a16f6a5c2aa8d77b41a9b10d4bc3d849c2f88870e944
 ENV DEBIAN_FRONTEND=noninteractive
@@ -77,3 +81,17 @@ VOLUME /data
 EXPOSE 3010
 WORKDIR /app/apps/daemon
 CMD ["tsx", "src/main.ts"]
+
+# --- The runtime image plus the test runner, to run the live tests inside it ---
+FROM runtime AS live-test
+USER root
+COPY --from=deps-dev /app/node_modules /app/node_modules
+COPY --from=deps-dev /app/apps/daemon/node_modules /app/apps/daemon/node_modules
+# The vision test paints a code into a PNG with ffmpeg.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-croscore \
+ && rm -rf /var/lib/apt/lists/*
+COPY vitest.config.ts /app/
+RUN chown -R companion:companion /app
+USER companion
+WORKDIR /app
+CMD ["sleep", "infinity"]
