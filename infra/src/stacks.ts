@@ -285,7 +285,7 @@ export class VmImageStack extends cdk.Stack {
         data: [
           "schemaVersion: 1.0",
           "phases:",
-          `  ${kind === "build" ? "build" : "test"}:`,
+          `  - name: ${kind}`,
           "    steps:",
           `      - name: ${kind}Host`,
           "        action: ExecuteBash",

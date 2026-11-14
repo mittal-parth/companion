@@ -237,6 +237,21 @@ describe("VM image", () => {
     image.resourceCountIs("AWS::ImageBuilder::Component", 2);
   });
 
+  it("writes each component as a list of named phases, as Image Builder requires", () => {
+    const components = Object.values(
+      templates().image.findResources("AWS::ImageBuilder::Component"),
+    );
+    expect(components).toHaveLength(2);
+    for (const kind of ["build", "test"]) {
+      const component = components.find((resource) =>
+        String(resource.Properties.Name).includes(`-${kind}-`),
+      );
+      expect(String(component?.Properties.Data)).toContain(
+        `phases:\n  - name: ${kind}\n    steps:\n`,
+      );
+    }
+  });
+
   it("builds on the build machine's profile and no other", () => {
     templates().image.hasResourceProperties(
       "AWS::ImageBuilder::InfrastructureConfiguration",
