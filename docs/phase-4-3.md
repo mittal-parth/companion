@@ -189,7 +189,7 @@ sequenceDiagram
     participant R as Relay
     participant D as Daemon
 
-    rect rgb(245, 245, 245)
+    rect rgba(120, 120, 120, 0.15)
     Note over W,D: The VM drops before it answers
     W->>R: request
     R->>D: request frame
@@ -197,7 +197,7 @@ sequenceDiagram
     R-->>W: 502 The VM disconnected
     end
 
-    rect rgb(245, 245, 245)
+    rect rgba(120, 120, 120, 0.15)
     Note over W,D: The VM drops mid-stream
     D-->>R: response frame and some chunks
     R-->>W: partial stream
@@ -205,7 +205,7 @@ sequenceDiagram
     R--xW: response destroyed, the stream errors
     end
 
-    rect rgb(245, 245, 245)
+    rect rgba(120, 120, 120, 0.15)
     Note over B,D: The caller leaves (tab closed, fetch aborted)
     B--xW: connection closed
     W--xR: connection closed
