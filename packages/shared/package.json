@@ -8,14 +8,18 @@
     "./protocol": "./src/protocol.ts",
     "./schedule": "./src/schedule.ts",
     "./tunnel": "./src/tunnel.ts",
-    "./vm": "./src/vm.ts"
+    "./vm": "./src/vm.ts",
+    "./tunnel-client": "./src/tunnel-client.ts",
+    "./host": "./src/host.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.4.0",
     "croner": "^11.0.0",
-    "open-bot-avatar": "0.2.1"
+    "open-bot-avatar": "0.2.1",
+    "ws": "^8.23.0"
   },
   "devDependencies": {
-    "@types/node": "^24.19.2"
+    "@types/node": "^24.19.2",
+    "@types/ws": "^8.18.2"
   }
 }

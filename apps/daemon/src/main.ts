@@ -9,7 +9,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { startDaemon } from "./api.js";
-import { startTunnel } from "./tunnel.js";
+import { startTunnel } from "@companion/shared/tunnel-client";
 
 const dataDir = process.env.COMPANION_DATA_DIR ?? "/data";
 const port = Number(process.env.PORT ?? "3010");

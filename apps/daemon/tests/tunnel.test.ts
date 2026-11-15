@@ -13,7 +13,7 @@ import {
 } from "@companion/shared/tunnel";
 import { afterEach, expect, test } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
-import { startTunnel } from "../src/tunnel.js";
+import { startTunnel } from "@companion/shared/tunnel-client";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {

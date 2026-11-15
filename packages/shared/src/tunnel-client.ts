@@ -1,5 +1,6 @@
 /**
- * The daemon's side of the relay tunnel.
+ * The VM side of the relay tunnel, used by every program that dials the relay
+ * (a daemon, a host agent).
  *
  * A VM accepts no inbound connections, so the daemon dials out to the relay and
  * keeps that websocket open, reconnecting whenever it drops. Requests that
