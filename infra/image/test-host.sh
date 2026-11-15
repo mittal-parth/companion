@@ -18,7 +18,7 @@ node --version | grep -q "v24" || { echo "wrong node"; exit 1; }
 ! command -v docker >/dev/null || { echo "docker is still installed"; exit 1; }
 
 # The agent's code loads, and its own tests of the rules need no microVM.
-(cd /opt/companion/repo/apps/host && /opt/tsx/node_modules/.bin/tsx --eval 'await import("./src/agent.ts"); console.log("agent loads")')
+(cd /opt/companion/repo/apps/host && /opt/tsx/node_modules/.bin/tsx --eval 'import("./src/agent.ts").then(() => console.log("agent loads"))')
 
 # The root filesystem holds what a microVM needs: our init, the daemon, the user.
 mkdir -p /mnt/check

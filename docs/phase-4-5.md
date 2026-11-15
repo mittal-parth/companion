@@ -81,3 +81,29 @@ On an x86 EC2 instance with nested virtualization enabled (`--cpu-options Nested
 - `apps/host/tests`: the agent's rules through its HTTP handler, and exactly what the runner would run (firewall rules, jailer arguments, the token only on the private drive).
 - `infra/tests/stacks.test.ts`: the host's and provisioner's permissions and settings against the synthesized templates.
 - On a real host: the model-free browser and desktop tests inside a microVM (`infra/spike/` scripts, as in the spike), then a user signing in, the setup screen provisioning a computer, and a turn through the relay.
+
+## Run on the deployed host (2026-11-15)
+
+One `m8i.xlarge` host from the pipeline-built image (`ami-08faf42f…`), the real relay, a production build of the web app, and the dev account.
+
+| Step                    | Result                                                                                                                                                                                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Host image build        | install succeeded; the image test failed on a bug in `test-host.sh` itself (`tsx --eval` has no top-level `await`), fixed in this PR. The AMI the build produced was used for the run, so the pipeline has not yet passed end to end.      |
+| Host agent starts       | connected to the relay and answered `GET /computers` with an empty list: the image boots, the Parameter Store token is read, the firewall is set up and the tunnel connects                                                                |
+| First visit             | the web server created a 20 GiB encrypted volume in the host's zone; the agent attached it and started a microVM in slot 1; the setup screen showed `setting-up`, and the computer became ready once its daemon answered through the relay |
+| App against the microVM | the bot list came from the daemon inside the microVM, through the relay                                                                                                                                                                    |
+| Real model turns        | bot creation (`201` in about 11 s) and its opening turn, then a second message answered `pong`, both run by the model from inside the microVM (the key reached the guest through Parameter Store and the private config drive)             |
+
+Things this run showed:
+
+- The Next dev server blocks its client scripts for `127.0.0.1`, so forms did not hydrate and sent plain `GET /?message=…` requests. The run uses a production build (`infra/scripts/e2e-real-host.ts` expects one).
+- The script's first pass check matched the bot's thought, which quotes the prompt. It now waits for the turn to end and rejects a reply that admits the tool failed.
+- A host replaced (not rebooted) loses the agent's saved list, and in this task `reconcile` does not restart a `ready` computer. Restart after host loss is part of 4.5a.
+
+## Open: a bot's browser and desktop on the deployed host
+
+**Not working yet.** In live turns on the deployed host, a bot asked to use its browser said the browser skill was not available and fell back to a plain web fetch, and a bot asked to launch the calculator got a launch failure that mentions a missing accessibility bus. `infra/scripts/e2e-real-host.ts --tools` fails on the browser turn for this reason.
+
+What is known: the same tools passed in a microVM in the spike (the smoke check and 28 of 28 `browser`, `desktop` tests), and the daemon works in the container image. What is not known is why the live path differs. Likely places to look are how the engine finds the `browser` and `desktop` skills and commands in the read-only root filesystem, and the accessibility bus setup under the guest's `init` (the spike's init also mounted tmpfs but ran the daemon's hosts in-process). There is no remote shell on the host by design, so finding out needs the guest's console log, which the agent keeps in `/var/lib/companion-host/logs/` but does not yet expose.
+
+This must be fixed before 4.5 meets its done-when for bots that browse.
