@@ -61,3 +61,77 @@ Then run the web app with those settings, sign in, and watch the screen. Afterwa
 ## Checks
 
 `apps/web/tests/vm.test.ts` runs the whole state machine against a fake store and a fake EC2 that, like the real one, returns the same machine for a repeated token: concurrent requests, a crash before saving, a full zone, timeouts and cleanup, and Try again. `packages/shared/src/vm.test.ts` covers the token. `apps/web/tests/daemon.test.ts` covers each user reaching only their own VM. `infra/tests/stacks.test.ts` keeps the new permission limited to tagged machines.
+
+## Sequence diagram
+
+The parties: the **browser** (the setup screen), the **web server** (`reconcile`), **Supabase** (the `vms` row), **EC2**, and the **relay** with the user's **daemon** behind it. Every box is one call of `reconcile`; the first runs when the page loads and the rest run on the screen's polls.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant W as Web server (reconcile)
+    participant S as Supabase (vms row)
+    participant E as EC2
+    participant R as Relay and daemon
+
+    Note over B,R: 1. First visit of a new user
+    B->>W: open / (signed in)
+    W->>S: get_vm: no row
+    W->>S: claim_vm (atomic)
+    S-->>W: row: launching, attempt time T
+    W->>E: find by tags (user, T): none
+    W->>E: RunInstances (token from user, T, zone 0, user data with relay token)
+    E-->>W: instance id
+    W->>S: update_vm: booting + instance id
+    W-->>B: setup screen ("Setting up your computer")
+
+    Note over B,R: 2. Two requests at the same moment
+    B->>W: request A and request B
+    W->>S: claim_vm from A: wins
+    W->>S: claim_vm from B: no row back
+    W->>S: get_vm from B: launching (or booting)
+    Note over W,E: B never launches. If both reach EC2, the repeated token returns the same machine.
+
+    Note over B,R: 3. Polling until it is usable
+    loop every 3 s while setting up
+        B->>W: GET /api/vm
+        W->>E: describe instance
+        alt still pending
+            W-->>B: setting-up
+        else running
+            W->>R: GET /bots through the relay
+            alt daemon not connected yet (503)
+                W-->>B: setting-up
+            else daemon answers
+                W->>S: update_vm: ready
+                W-->>B: ready
+                B->>B: happy beat, then the app opens
+            end
+        end
+    end
+
+    Note over B,R: 4. Crash after launching, before saving
+    B->>W: poll
+    W->>E: RunInstances (machine created)
+    W--xS: update_vm fails
+    B->>W: next poll (row still launching)
+    W->>E: find by tags (user, T): found
+    W->>S: update_vm: booting + instance id
+    Note over W,E: No second machine.
+
+    Note over B,R: 5. A zone is full
+    W->>E: RunInstances in zone 0
+    E-->>W: no capacity
+    W->>E: RunInstances in zone 1 (its own token)
+    E-->>W: instance id
+
+    Note over B,R: 6. It never becomes usable, then Try again
+    B->>W: poll after 10 minutes
+    W->>E: modify data disk to delete on terminate
+    W->>E: terminate instance
+    W->>S: update_vm: failed
+    W-->>B: failed ("That took longer than expected")
+    B->>W: POST /api/vm (Try again)
+    W->>S: claim_vm retry (failed only): new attempt time T2
+    W->>E: RunInstances with a new token, then as in 1
+```
