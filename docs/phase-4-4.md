@@ -30,8 +30,6 @@ One user has exactly one computer, so its record is one row per user in a `vms` 
 
 With `COMPANION_DAEMON_URL` set (a laptop, or the e2e server) there is no provisioning and nothing changes. `COMPANION_RELAY_VM` is gone: through the relay each user reaches the VM named by their own account id.
 
-`COMPANION_E2E_VM=ok|fail` replaces AWS and Supabase with an in-memory computer so the screens can be driven in a browser (`fail` fails the first attempt and succeeds on Try again).
-
 ## Settings for a real run
 
 The web server reads these (never the browser):

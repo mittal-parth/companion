@@ -9,7 +9,36 @@
  */
 import { randomUUID } from "node:crypto";
 import { reconcile } from "../src/lib/vm";
-import { ec2Cloud, memoryStore, relayProbe } from "../src/lib/vm-aws";
+import type { VmRow, VmStore } from "@companion/shared/vm";
+import { ec2Cloud, relayProbe } from "../src/lib/vm-aws";
+
+/** The record kept in memory, so this check needs no database. */
+function memoryStore(): VmStore {
+  let row: VmRow | null = null;
+  return {
+    async get() {
+      return row;
+    },
+    async claim(userId, retry) {
+      if (row !== null && !(retry && row.state === "failed")) return null;
+      row = {
+        userId,
+        state: "launching",
+        instanceId: null,
+        attemptStartedAt: new Date().toISOString(),
+      };
+      return row;
+    },
+    async update(_current, patch) {
+      if (row === null) return;
+      row = {
+        ...row,
+        state: patch.state,
+        instanceId: patch.instanceId ?? row.instanceId,
+      };
+    },
+  };
+}
 
 const userId = randomUUID();
 const cloud = ec2Cloud();

@@ -43,7 +43,6 @@ const dataDevice = "/dev/sdf";
 
 /** Whether this server gives each user a cloud computer. A direct daemon means no. */
 export function provisioningEnabled(): boolean {
-  if (scriptedMode() !== undefined) return true;
   if (e2eSessionOpen()) return false;
   return (process.env.COMPANION_RELAY_URL ?? "").trim() !== "";
 }
@@ -82,13 +81,6 @@ export async function relayProbe(userId: string): Promise<boolean> {
 let deps: ReconcileDeps | undefined;
 
 function realDeps(): ReconcileDeps {
-  const mode = scriptedMode();
-  if (mode !== undefined) {
-    // On globalThis because the page and the API route are separate bundles
-    // and must see the same scripted computer.
-    const shared = globalThis as { scriptedVm?: ReconcileDeps };
-    return (shared.scriptedVm ??= scriptedDeps(mode));
-  }
   deps ??= {
     store: supabaseStore(),
     cloud: ec2Cloud(),
@@ -96,70 +88,6 @@ function realDeps(): ReconcileDeps {
     now: () => Date.now(),
   };
   return deps;
-}
-
-/**
- * `COMPANION_E2E_VM` stands in for AWS and Supabase so the setup screen can be
- * driven in a browser: "ok" is ready after a few polls, "fail" fails the first
- * attempt and succeeds on Try again. It is for browser checks only.
- */
-function scriptedMode(): "ok" | "fail" | undefined {
-  const mode = (process.env.COMPANION_E2E_VM ?? "").trim();
-  return mode === "ok" || mode === "fail" ? mode : undefined;
-}
-
-function scriptedDeps(mode: "ok" | "fail"): ReconcileDeps {
-  let attempts = 0;
-  let polls = 0;
-  return {
-    store: memoryStore(() => {
-      attempts += 1;
-      polls = 0;
-    }),
-    cloud: {
-      zones: 1,
-      find: async () => null,
-      launch: async () => `i-scripted-${attempts}`,
-      describe: async () =>
-        mode === "fail" && attempts === 1 ? "gone" : "running",
-      destroy: async () => undefined,
-    },
-    probe: async () => ++polls >= 3,
-    now: () => Date.now(),
-  };
-}
-
-/**
- * A record kept in memory instead of Supabase, for the scripted mode and for
- * the real-AWS check script, which needs no database. `onClaim` runs for each
- * attempt started.
- */
-export function memoryStore(onClaim?: () => void): VmStore {
-  let row: VmRow | null = null;
-  return {
-    async get() {
-      return row;
-    },
-    async claim(userId, retry) {
-      if (row !== null && !(retry && row.state === "failed")) return null;
-      onClaim?.();
-      row = {
-        userId,
-        state: "launching",
-        instanceId: null,
-        attemptStartedAt: new Date().toISOString(),
-      };
-      return row;
-    },
-    async update(_current, patch) {
-      if (row === null) return;
-      row = {
-        ...row,
-        state: patch.state,
-        instanceId: patch.instanceId ?? row.instanceId,
-      };
-    },
-  };
 }
 
 type VmRecord = {
