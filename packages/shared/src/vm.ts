@@ -1,7 +1,7 @@
 /**
  * What the control plane needs to know about a user's cloud computer: the
  * states it moves through, the ports `reconcile` talks to, and the one token
- * rule that keeps a retried launch from creating a second machine.
+ * rule that keeps a repeated request from creating a second data volume.
  * The ports let tests run the whole state machine without AWS or a database.
  */
 import { createHash } from "node:crypto";
@@ -12,11 +12,12 @@ export type VmState = "launching" | "booting" | "ready" | "failed";
 /** What the setup screen shows. Everything not ready or failed is "setting-up". */
 export type VmStatus = "setting-up" | "ready" | "failed";
 
-/** One user's computer as stored: one row per user, because a user has one VM. */
+/** One user's computer as stored: one row per user, because a user has one computer. */
 export type VmRow = {
   userId: string;
   state: VmState;
-  instanceId: string | null;
+  /** The user's data volume, set once it exists. It outlives every attempt. */
+  volumeId: string | null;
   /** Set when an attempt is claimed. Kept as the database's text so it round-trips exactly. */
   attemptStartedAt: string;
 };
@@ -33,36 +34,39 @@ export type VmStore = {
   /** Changes a row only while it is still the same attempt. */
   update(
     row: VmRow,
-    patch: { state: VmState; instanceId?: string | null },
+    patch: { state: VmState; volumeId?: string | null },
   ): Promise<void>;
 };
 
-/** What EC2 says about an instance, reduced to what `reconcile` decides on. */
-export type InstanceState = "pending" | "running" | "gone";
-
-/** The machines themselves. */
-export type VmCloud = {
-  /** The instance this attempt already launched, if one exists. */
-  find(row: VmRow): Promise<{ id: string } | null>;
-  /**
-   * Launches one machine in the chosen zone. Repeating the call for the same
-   * attempt returns the same machine. Throws `NoCapacityError` when the zone is full.
-   */
-  launch(row: VmRow, zone: number): Promise<string>;
-  describe(instanceId: string): Promise<InstanceState>;
-  /** Deletes the machine and its disks. Used only for an attempt that never became ready. */
-  destroy(instanceId: string): Promise<void>;
-  /** How many zones there are to try. */
-  zones: number;
+/**
+ * Each user's data volume: the disk that holds their bots and files and
+ * outlives every computer built on it. There is one per user, so it is found
+ * by owner, not by attempt, and it is never deleted automatically.
+ */
+export type VmVolumes = {
+  find(userId: string): Promise<string | null>;
+  /** Creates it. Repeating the call for the same user returns the same volume. */
+  create(userId: string): Promise<string>;
 };
 
-/** Thrown by `VmCloud.launch` when the chosen zone has no room. */
+/** The machines that run computers. A host runs many users' computers side by side. */
+export type VmHosts = {
+  /**
+   * Makes sure this user's computer is running on a host, on their volume.
+   * Repeating it is harmless: a computer already starting or running is left
+   * alone. Throws `NoCapacityError` when no host has room.
+   */
+  start(row: VmRow & { volumeId: string }): Promise<void>;
+};
+
+/** Thrown by `VmHosts.start` when no host has room for another computer. */
 export class NoCapacityError extends Error {}
 
 /** How `reconcile` reaches the daemon and reads the clock. */
 export type ReconcileDeps = {
   store: VmStore;
-  cloud: VmCloud;
+  volumes: VmVolumes;
+  hosts: VmHosts;
   /** True when the daemon answers through the relay. */
   probe(userId: string): Promise<boolean>;
   now(): number;
@@ -75,19 +79,13 @@ export const vmLaunchTimeoutMs = 10 * 60 * 1000;
 export const vmTokenLifetimeSeconds = 365 * 24 * 60 * 60;
 
 /**
- * The idempotency token for one launch attempt. The same attempt always gets
- * the same token, so EC2 hands back the machine it already made; a new attempt
- * has a new `attemptStartedAt` and so a new token. The zone is part of it because
- * EC2 refuses one token reused with different settings. EC2 allows 64
- * characters, which a SHA-256 in hex fills exactly.
+ * The idempotency token for creating a user's data volume. A user has one
+ * volume, so the token depends on the user alone and a repeated create
+ * returns the volume already made. EC2 allows 64 characters, which a SHA-256
+ * in hex fills exactly.
  */
-export function launchToken(
-  row: Pick<VmRow, "userId" | "attemptStartedAt">,
-  zone = 0,
-): string {
-  return createHash("sha256")
-    .update(`${row.userId}\n${row.attemptStartedAt}\n${zone}`)
-    .digest("hex");
+export function volumeToken(userId: string): string {
+  return createHash("sha256").update(`volume\n${userId}`).digest("hex");
 }
 
 /** The three states the setup screen tells apart. */

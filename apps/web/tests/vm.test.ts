@@ -1,17 +1,17 @@
 /**
- * Proves a user's computer is made once and cleaned up when it fails, using an
- * in-memory store and a fake EC2 that, like the real one, hands back the same
- * machine for a repeated launch token. No AWS and no database.
+ * Proves a user's computer is set up once and recovers from failure, using an
+ * in-memory store, a fake volume service that hands back the same volume for a
+ * repeated create, and a fake host. No AWS and no database.
  */
 import {
-  launchToken,
   NoCapacityError,
   vmLaunchTimeoutMs,
-  type InstanceState,
+  volumeToken,
   type ReconcileDeps,
-  type VmCloud,
+  type VmHosts,
   type VmRow,
   type VmStore,
+  type VmVolumes,
 } from "@companion/shared/vm";
 import { expect, test } from "vitest";
 import { reconcile } from "../src/lib/vm";
@@ -33,7 +33,8 @@ function fakeStore(now: () => number, failNextUpdate = false) {
         row = {
           userId,
           state: "launching",
-          instanceId: null,
+          // A retry keeps the volume the user already has.
+          volumeId: row?.volumeId ?? null,
           // The database's now(), nudged by the claim count so attempts never share a time.
           attemptStartedAt: new Date(now() + claims).toISOString(),
         };
@@ -50,164 +51,152 @@ function fakeStore(now: () => number, failNextUpdate = false) {
       row = {
         ...row,
         state: patch.state,
-        instanceId:
-          patch.instanceId === undefined ? row.instanceId : patch.instanceId,
+        volumeId: patch.volumeId === undefined ? row.volumeId : patch.volumeId,
       };
     },
   };
   return { store, current: () => row };
 }
 
-/** A cloud where a repeated token returns the machine it already made. */
-function fakeCloud(options: { fullZones?: number[] } = {}) {
+/** Volumes where a repeated token returns the volume already made, and one can be found by owner. */
+function fakeVolumes() {
   const byToken = new Map<string, string>();
-  const tags = new Map<string, string>();
-  const destroyed: string[] = [];
-  const state = new Map<string, InstanceState>();
-  const cloud: VmCloud = {
-    zones: 2,
-    async find(row) {
-      const id = tags.get(`${row.userId}|${row.attemptStartedAt}`);
-      return id === undefined ? null : { id };
+  const byOwner = new Map<string, string>();
+  const volumes: VmVolumes = {
+    async find(userId) {
+      return byOwner.get(userId) ?? null;
     },
-    async launch(row, zone) {
-      if (options.fullZones?.includes(zone)) throw new NoCapacityError("full");
-      const token = launchToken(row, zone);
+    async create(userId) {
+      const token = volumeToken(userId);
       let id = byToken.get(token);
       if (id === undefined) {
-        id = `i-${byToken.size + 1}`;
+        id = `vol-${byToken.size + 1}`;
         byToken.set(token, id);
-        tags.set(`${row.userId}|${row.attemptStartedAt}`, id);
-        state.set(id, "pending");
+        byOwner.set(userId, id);
       }
       return id;
     },
-    async describe(id) {
-      return state.get(id) ?? "gone";
-    },
-    async destroy(id) {
-      destroyed.push(id);
-      state.set(id, "gone");
-    },
   };
-  return {
-    cloud,
-    state,
-    destroyed,
-    launched: () => new Set(byToken.values()).size,
-  };
+  return { volumes, made: () => new Set(byToken.values()).size };
 }
 
-function setup(
-  options: {
-    probe?: boolean;
-    fullZones?: number[];
-    failNextUpdate?: boolean;
-  } = {},
-) {
+/** A host that starts a computer once however often it is asked, or has no room. */
+function fakeHost() {
+  const running = new Map<string, string>();
+  const state = { full: false, starts: 0 };
+  const hosts: VmHosts = {
+    async start(row) {
+      state.starts += 1;
+      if (state.full) throw new NoCapacityError("no room");
+      running.set(row.userId, row.volumeId);
+    },
+  };
+  return { hosts, running, state };
+}
+
+function setup(options: { probe?: boolean; failNextUpdate?: boolean } = {}) {
   const clock = { ms: Date.UTC(2026, 0, 1, 0, 1) };
   const database = fakeStore(() => clock.ms, options.failNextUpdate);
-  const machines = fakeCloud({ fullZones: options.fullZones });
+  const disks = fakeVolumes();
+  const host = fakeHost();
   const probe = { up: options.probe ?? false };
   const deps: ReconcileDeps = {
     store: database.store,
-    cloud: machines.cloud,
+    volumes: disks.volumes,
+    hosts: host.hosts,
     probe: async () => probe.up,
     now: () => clock.ms,
   };
-  return { deps, database, machines, clock, probe };
+  return { deps, database, disks, host, clock, probe };
 }
 
-test("a new user's first visit launches one machine and waits for it", async () => {
-  const { deps, database, machines } = setup();
+test("a new user's first visit makes one volume, starts their computer and waits", async () => {
+  const { deps, database, disks, host } = setup();
   expect((await reconcile(user, deps)).status).toBe("setting-up");
-  expect(database.current()?.state).toBe("booting");
-  expect(machines.launched()).toBe(1);
+  expect(database.current()).toMatchObject({
+    state: "booting",
+    volumeId: "vol-1",
+  });
+  expect(disks.made()).toBe(1);
+  expect(host.running.get(user)).toBe("vol-1");
 });
 
-test("the user is ready only once the machine is running and answers", async () => {
-  const { deps, machines, probe } = setup();
+test("the user is ready only once the computer answers through the relay", async () => {
+  const { deps, probe } = setup();
   await reconcile(user, deps);
-  expect((await reconcile(user, deps)).status).toBe("setting-up");
-  machines.state.set("i-1", "running");
   expect((await reconcile(user, deps)).status).toBe("setting-up");
   probe.up = true;
   expect((await reconcile(user, deps)).status).toBe("ready");
 });
 
-test("requests at the same moment still make one machine", async () => {
-  const { deps, machines } = setup();
+test("requests at the same moment still make one volume and one computer", async () => {
+  const { deps, disks, host } = setup();
   await Promise.all(Array.from({ length: 6 }, () => reconcile(user, deps)));
-  expect(machines.launched()).toBe(1);
+  expect(disks.made()).toBe(1);
+  expect(host.running.size).toBe(1);
 });
 
-test("a crash after launching, before saving, does not launch a second machine", async () => {
-  const { deps, database, machines } = setup({ failNextUpdate: true });
+test("a crash after making the volume, before saving, does not make a second volume", async () => {
+  const { deps, database, disks } = setup({ failNextUpdate: true });
   await expect(reconcile(user, deps)).rejects.toThrow("dropped");
   expect(database.current()?.state).toBe("launching");
   await reconcile(user, deps);
-  expect(machines.launched()).toBe(1);
-  expect(database.current()?.instanceId).toBe("i-1");
+  expect(disks.made()).toBe(1);
+  expect(database.current()?.volumeId).toBe("vol-1");
 });
 
-test("a full zone is skipped for the next one", async () => {
-  const { deps, machines } = setup({ fullZones: [0] });
-  await reconcile(user, deps);
-  expect(machines.launched()).toBe(1);
-});
-
-test("a user stays setting up when every zone is full, until the time limit", async () => {
-  const { deps, database, machines, clock } = setup({ fullZones: [0, 1] });
+test("a host with no room keeps the user setting up until the time limit, then fails without deleting the volume", async () => {
+  const { deps, database, disks, host, clock } = setup();
+  host.state.full = true;
   expect((await reconcile(user, deps)).status).toBe("setting-up");
-  expect(machines.launched()).toBe(0);
   clock.ms += vmLaunchTimeoutMs + 1000;
   expect((await reconcile(user, deps)).status).toBe("failed");
-  expect(database.current()?.state).toBe("failed");
+  expect(database.current()?.volumeId).toBe("vol-1");
+  expect(disks.made()).toBe(1);
 });
 
-test("a machine that is not usable in time is deleted and the attempt fails", async () => {
-  const { deps, machines, clock } = setup();
+test("a computer that is not usable in time fails the attempt", async () => {
+  const { deps, clock } = setup();
   await reconcile(user, deps);
-  machines.state.set("i-1", "running");
   clock.ms += vmLaunchTimeoutMs + 1000;
   expect((await reconcile(user, deps)).status).toBe("failed");
-  expect(machines.destroyed).toEqual(["i-1"]);
 });
 
-test("a machine that disappears fails the attempt", async () => {
-  const { deps, machines } = setup();
+test("a computer that has room again is started on the next call", async () => {
+  const { deps, host, probe } = setup();
+  host.state.full = true;
   await reconcile(user, deps);
-  machines.state.set("i-1", "gone");
-  expect((await reconcile(user, deps)).status).toBe("failed");
+  expect(host.running.size).toBe(0);
+  host.state.full = false;
+  probe.up = true;
+  expect((await reconcile(user, deps)).status).toBe("ready");
+  expect(host.running.get(user)).toBe("vol-1");
 });
 
-test("a timed out attempt that crashed before saving still deletes its machine", async () => {
-  const { deps, machines, clock } = setup({ failNextUpdate: true });
-  await expect(reconcile(user, deps)).rejects.toThrow("dropped");
-  clock.ms += vmLaunchTimeoutMs + 1000;
-  expect((await reconcile(user, deps)).status).toBe("failed");
-  expect(machines.destroyed).toEqual(["i-1"]);
-});
-
-test("a failed user stays failed until they try again, which starts a new machine", async () => {
-  const { deps, machines, clock } = setup();
+test("a failed user stays failed until they try again, which reuses their volume", async () => {
+  const { deps, disks, host, clock, probe } = setup();
+  host.state.full = true;
   await reconcile(user, deps);
   clock.ms += vmLaunchTimeoutMs + 1000;
   await reconcile(user, deps);
   expect((await reconcile(user, deps)).status).toBe("failed");
-  expect(machines.launched()).toBe(1);
 
   clock.ms = Date.UTC(2026, 0, 1, 1, 0);
-  expect((await reconcile(user, deps, true)).status).toBe("setting-up");
-  expect(machines.launched()).toBe(2);
+  host.state.full = false;
+  probe.up = true;
+  expect((await reconcile(user, deps, true)).status).toBe("ready");
+  expect(disks.made()).toBe(1);
+  expect(host.running.get(user)).toBe("vol-1");
 });
 
 test("trying again twice at once starts one new attempt", async () => {
-  const { deps, machines, clock } = setup();
+  const { deps, host, clock } = setup();
+  host.state.full = true;
   await reconcile(user, deps);
   clock.ms += vmLaunchTimeoutMs + 1000;
   await reconcile(user, deps);
   clock.ms = Date.UTC(2026, 0, 1, 1, 0);
+  host.state.full = false;
   await Promise.all([reconcile(user, deps, true), reconcile(user, deps, true)]);
-  expect(machines.launched()).toBe(2);
+  expect(host.running.size).toBe(1);
 });
