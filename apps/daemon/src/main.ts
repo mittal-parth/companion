@@ -35,6 +35,9 @@ console.log(`daemon ready on ${host}:${daemon.port}`);
 // relay instead. Locally there is no relay and nothing here runs.
 const relayUrl = (process.env.COMPANION_RELAY_URL ?? "").trim();
 const vmToken = (process.env.COMPANION_VM_TOKEN ?? "").trim();
+// Taken out of the environment now it is read, so the engine, the browser and
+// every command a bot runs start without it and cannot hand it on.
+delete process.env.COMPANION_VM_TOKEN;
 if (relayUrl !== "" && vmToken === "") {
   throw new Error("COMPANION_RELAY_URL needs COMPANION_VM_TOKEN.");
 }

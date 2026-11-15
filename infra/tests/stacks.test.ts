@@ -100,6 +100,15 @@ describe("VM roles", () => {
       JSON.stringify(s.Action).includes("TerminateInstances"),
     );
     expect(lifecycle).toHaveLength(1);
+    // Releasing a failed attempt's data disk is allowed only on tagged machines and disks.
+    const release = statements.filter((s) =>
+      JSON.stringify(s.Action).includes("ModifyInstanceAttribute"),
+    );
+    expect(release).toHaveLength(1);
+    expect(JSON.stringify(release[0]?.Condition)).toContain(
+      "ec2:ResourceTag/companion:managed",
+    );
+    expect(JSON.stringify(release[0]?.Resource)).toContain("volume/");
     expect(JSON.stringify(lifecycle[0]?.Condition)).toContain(
       "ec2:ResourceTag/companion:managed",
     );

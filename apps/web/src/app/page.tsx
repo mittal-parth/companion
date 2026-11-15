@@ -6,8 +6,10 @@
  */
 import { BotScreen, openDaemon } from "@/components/bot-screen";
 import { Landing } from "@/components/landing";
+import { VmSetup } from "@/components/vm-setup";
 import { openFirstBot } from "@/lib/daemon";
 import { currentAccount } from "@/lib/supabase/server";
+import { ensureVm, provisioningEnabled } from "@/lib/vm-aws";
 import { connection } from "next/server";
 
 export default async function Home({
@@ -25,6 +27,13 @@ export default async function Home({
         passwordForm={process.env.NODE_ENV === "development"}
       />
     );
+  }
+  // A new person's first visit starts their computer; until it is up they wait here.
+  if (provisioningEnabled()) {
+    const vm = await ensureVm(account.id);
+    if (vm.status !== "ready") {
+      return <VmSetup avatarUrl={account.avatarUrl} initial={vm.status} />;
+    }
   }
   return (
     <BotScreen

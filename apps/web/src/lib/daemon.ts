@@ -15,6 +15,7 @@ import {
   type TurnEvent,
 } from "@companion/shared/protocol";
 import { signToken } from "@companion/shared/tunnel";
+import { currentAccount } from "./supabase/server";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import type { UIMessage } from "ai";
 import {
@@ -29,7 +30,7 @@ import {
  */
 type DaemonTarget =
   | { mode: "direct"; url: string }
-  | { mode: "relay"; url: string; vm: string; secret: string };
+  | { mode: "relay"; url: string; secret: string };
 
 /**
  * Reads the target from the environment of the web process, not the browser.
@@ -50,15 +51,12 @@ function daemonTarget(): DaemonTarget {
     }
     return { mode: "direct", url: direct.replace(/\/$/, "") };
   }
-  // Until accounts own VMs (Task 4.4), one VM is named in the environment.
-  const vm = read("COMPANION_RELAY_VM");
+  // The VM is the signed-in user's own, named by their id, so it is not set here.
   const secret = read("COMPANION_RELAY_SECRET");
-  if (vm === "" || secret === "") {
-    throw new Error(
-      "COMPANION_RELAY_URL needs COMPANION_RELAY_VM and COMPANION_RELAY_SECRET.",
-    );
+  if (secret === "") {
+    throw new Error("COMPANION_RELAY_URL needs COMPANION_RELAY_SECRET.");
   }
-  return { mode: "relay", url: relay.replace(/\/$/, ""), vm, secret };
+  return { mode: "relay", url: relay.replace(/\/$/, ""), secret };
 }
 
 /**
@@ -239,20 +237,25 @@ async function daemonJson<T>(path: string): Promise<T> {
 /**
  * Calls a daemon route, directly or through the relay, and returns the
  * response as the daemon sent it. The caller owns a streaming response. A relay
- * call carries a token that names the VM and lasts a minute: it is checked when
+ * call goes to the signed-in user's VM, or to `vm` when the caller names it, and
+ * carries a token that names that VM and lasts a minute: it is checked when
  * the request arrives, so a long stream is not cut off when it expires.
  */
-export function daemonFetch(
+export async function daemonFetch(
   path: string,
   init?: RequestInit,
+  vm?: string,
 ): Promise<Response> {
   const target = daemonTarget();
   if (target.mode === "direct") return fetch(`${target.url}${path}`, init);
+  // Each user reaches only their own VM, which is named by their account id.
+  const owner = vm ?? (await currentAccount())?.id;
+  if (owner === undefined) throw new Error("Sign in to continue.");
   const headers = new Headers(init?.headers);
   const exp = Math.floor(Date.now() / 1000) + 60;
   headers.set(
     "authorization",
-    `Bearer ${signToken({ role: "web", vm: target.vm, exp }, target.secret)}`,
+    `Bearer ${signToken({ role: "web", vm: owner, exp }, target.secret)}`,
   );
   return fetch(`${target.url}${path}`, { ...init, headers });
 }

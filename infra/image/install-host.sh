@@ -72,16 +72,19 @@ UNIT
 echo "COMPANION_IMAGE=$IMAGE_REF" > /etc/companion.env
 
 # Publishes no port: the daemon is reached from inside, and dials out to the relay.
+# /etc/companion-vm.env holds the relay address and this VM's token. cloud-init
+# writes it from the launch's user data; an image test with none gets an empty file.
 cat > /etc/systemd/system/companion.service <<'UNIT'
 [Unit]
 Description=Companion daemon container
 Requires=companion-data.service docker.service
-After=companion-data.service docker.service network-online.target
+After=companion-data.service docker.service network-online.target cloud-init.service
 
 [Service]
 EnvironmentFile=/etc/companion.env
+ExecStartPre=/bin/sh -c 'test -f /etc/companion-vm.env || install -m 600 /dev/null /etc/companion-vm.env'
 ExecStartPre=-/usr/bin/docker rm -f companion
-ExecStart=/usr/bin/docker run --rm --name companion --shm-size=1g -v /data:/data ${COMPANION_IMAGE}
+ExecStart=/usr/bin/docker run --rm --name companion --shm-size=1g --env-file /etc/companion-vm.env -v /data:/data ${COMPANION_IMAGE}
 ExecStop=/usr/bin/docker stop -t 30 companion
 Restart=on-failure
 RestartSec=5
