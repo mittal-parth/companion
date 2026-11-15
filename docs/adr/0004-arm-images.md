@@ -1,5 +1,7 @@
 # User VMs run on Graviton (arm64)
 
+Status: superseded by ADR 0005 for the VM image, which moves to x86 so it can run in microVMs on hosts with nested virtualization.
+
 **Decision:** The image and every tool in it target Linux arm64 (Graviton). No tool we ship needs x86, so the fallback to x86 in the plan is not taken.
 
 Checked on 2026-11-14 against the versions we pin or install. Each one publishes a Linux arm64 build:

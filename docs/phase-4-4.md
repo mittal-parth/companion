@@ -1,5 +1,7 @@
 # Phase 4.4: provisioning
 
+> **Superseded in part by Task 4.5.** A user's computer is now a microVM on a shared host with its own data volume, not an EC2 instance. `reconcile`, the `vms` table, the setup screen and the relay token described here carry over; the launch template, machine image and instance settings below do not. See `docs/phase-4-5.md`.
+
 A person's first visit now makes them a cloud computer. Nothing is clicked: the home page notices there is none, starts one, and shows a friendly "Setting up your computer" screen until it answers. An existing person with a ready computer goes straight to their bots.
 
 ## How it works
@@ -54,7 +56,7 @@ pnpm --filter @companion/infra deploy
 aws imagebuilder start-image-pipeline-execution --image-pipeline-arn <PipelineArn>
 ```
 
-Then run the web app with those settings, sign in, and watch the screen. Afterwards, delete the instance and its volumes from the console or `aws ec2 terminate-instances`. A daemon change does not reach new VMs until the AMI is rebuilt; updating on wake is Task 4.5a.
+Then run the web app with those settings, sign in, and watch the screen. Afterwards, delete the instance and its volumes from the console or `aws ec2 terminate-instances`. A daemon change does not reach new VMs until the AMI is rebuilt; updating on wake is Task 4.5b.
 
 ## Checks
 

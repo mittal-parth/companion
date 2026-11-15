@@ -4,13 +4,13 @@ A user's VM needs everything a bot's computer runs. This task packages it once, 
 
 ## What the image holds
 
-One container image, built from the `Dockerfile`, for Linux arm64 only (`docs/adr/0004-arm-images.md`).
+One container image, built from the `Dockerfile`, for Linux x86_64 only (`docs/adr/0005-microvms-on-shared-hosts.md`, which replaced arm64).
 
 - The daemon, run with `tsx` from the workspace layout.
 - OpenCode 2.2.6 from its GitHub release, pinned by checksum.
 - Xvfb, Openbox, the session and accessibility buses, Chrome, agent-browser, agent-desktop, Mousepad and Galculator, plus fonts.
 
-The build fails if any of these is not a working arm64 binary. The container runs as a user other than root.
+The build fails if any of these is not a working x86_64 binary. The container runs as a user other than root.
 
 The image holds no secret and no per-user state. Keys arrive as environment variables when it runs, and everything the daemon keeps lives under `/data`. `.dockerignore` keeps `.env`, login state and host-built dependencies out of every layer, because the image will be public.
 
@@ -37,7 +37,7 @@ Docker's default seccomp profile blocks the namespaces Chrome's sandbox needs, s
 
 ## CI builds and publishes the container image
 
-The `image` job in `.github/workflows/ci.yml` runs on an arm64 runner. It builds the image, starts it and runs the stack smoke check, scans it for secrets with Trivy, and, for pushes and same-repository pull requests, publishes it to `ghcr.io/<owner>/companion` tagged with the commit. The job summary prints the reference pinned by digest (`name@sha256:…`). The package is public, and an anonymous request for its manifest returns 200.
+The `image` job in `.github/workflows/ci.yml` runs on an x86_64 runner. It builds the image, starts it and runs the stack smoke check, scans it for secrets with Trivy, and, for pushes and same-repository pull requests, publishes it to `ghcr.io/<owner>/companion` tagged with the commit. The job summary prints the reference pinned by digest (`name@sha256:…`). The package is public, and an anonymous request for its manifest returns 200.
 
 ## The machine image
 

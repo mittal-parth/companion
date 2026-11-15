@@ -71,3 +71,25 @@ _Avoid_: browser profile, session
 **Bot window**:
 The browser window the daemon opens in the shared browser for one bot. Every `browser` command from that bot is pinned to it.
 _Avoid_: tab, session
+
+## Computer
+
+**Computer**:
+The one microVM a user's bots share, with its own kernel, memory and screen. It is disposable: each wake builds a new one from the current system image and the user's data volume.
+_Avoid_: instance, server, container
+
+**Host**:
+An EC2 machine that runs many users' computers side by side.
+_Avoid_: node, server
+
+**Data volume**:
+The one disk a user owns. It holds everything the daemon, OpenCode and the shared browser keep, and it outlives every computer built on it.
+_Avoid_: disk image, snapshot
+
+**Idle**:
+A computer is idle when no turn is running, no client is connected, no process a bot started is still running, and no schedule is due soon. An idle computer is turned off.
+_Avoid_: asleep, inactive
+
+**Wake**:
+Building a new computer for a user whose computer is off, so the next message or schedule can run.
+_Avoid_: resume, restart, boot
