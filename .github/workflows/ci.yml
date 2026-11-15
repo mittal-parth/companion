@@ -27,11 +27,13 @@ jobs:
           COMPANION_ALERT_EMAIL: ci@example.com
           COMPANION_RELAY_DOMAIN: relay.example.com
           COMPANION_IMAGE_REF: ghcr.io/ci/companion@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          COMPANION_HOST_COMMIT: "0000000000000000000000000000000000000000"
+          COMPANION_HOST_AMI: ami-0123456789abcdef0
 
-  # Builds the container image on an arm64 runner (the image is arm64 only),
+  # Builds the container image on an x86_64 runner (the image is x86_64 only),
   # proves the stack starts, scans it for secrets, and publishes it by digest.
   image:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write

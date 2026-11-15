@@ -20,6 +20,13 @@ export type InfraConfig = {
    * such as `ghcr.io/<owner>/companion@sha256:<digest>`. CI prints it.
    */
   imageRef: string;
+  /** The commit the host agent is installed from, which must already be pushed. */
+  hostCommit: string;
+  /**
+   * The host machine image, built by the pipeline. The host stack exists only
+   * when this is set, because there is nothing to launch before the first build.
+   */
+  hostAmi?: string;
   /**
    * The name the relay is served at, such as `relay.example.com`. The relay
    * stacks exist only when this is set, so a laptop-only setup needs none.
@@ -32,7 +39,7 @@ export type InfraConfig = {
   relayImageRef?: string;
 };
 
-/** Tag every user VM carries so roles can be limited to those instances. */
+/** Tag every host and user data volume carries so roles can be limited to them. */
 export const managedTag = { key: "companion:managed", value: "true" };
 
 /**
@@ -60,6 +67,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): InfraConfig {
       "Set COMPANION_IMAGE_REF to the image pinned by digest (name@sha256:...).",
     );
   }
+  const hostCommit = env.COMPANION_HOST_COMMIT?.trim();
+  if (!hostCommit || !/^[0-9a-f]{40}$/.test(hostCommit)) {
+    throw new Error("Set COMPANION_HOST_COMMIT to a full 40-character commit.");
+  }
+  const hostAmi = env.COMPANION_HOST_AMI?.trim() || undefined;
   const relayDomain = env.COMPANION_RELAY_DOMAIN?.trim() || undefined;
   const relayImageRef = env.COMPANION_RELAY_IMAGE_REF?.trim() || undefined;
   if (relayImageRef && !/@sha256:[0-9a-f]{64}$/.test(relayImageRef)) {
@@ -75,6 +87,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): InfraConfig {
     budgetUsd,
     alertEmail,
     imageRef,
+    hostCommit,
+    hostAmi,
     relayDomain,
     relayImageRef,
   };
