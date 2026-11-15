@@ -124,6 +124,8 @@ export class VmRolesStack extends cdk.Stack {
           }),
           ec2Arn("network-interface"),
           ec2Arn("volume"),
+          // The launch template every user VM starts from.
+          ec2Arn("launch-template"),
           this.formatArn({
             service: "ec2",
             account: "",
@@ -160,6 +162,15 @@ export class VmRolesStack extends cdk.Stack {
           "ec2:TerminateInstances",
         ],
         resources: [ec2Arn("instance")],
+        conditions: tagged,
+      }),
+    );
+    // A failed first attempt gives up its data disk with the machine. Changing
+    // a disk's delete-on-terminate flag is checked on the disk as well as the machine.
+    this.provisionerRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["ec2:ModifyInstanceAttribute"],
+        resources: [ec2Arn("instance"), ec2Arn("volume")],
         conditions: tagged,
       }),
     );
