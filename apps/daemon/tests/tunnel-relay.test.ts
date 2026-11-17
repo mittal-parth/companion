@@ -15,7 +15,7 @@ import { expect, test } from "vitest";
 import { startRelay } from "../../relay/src/relay.js";
 import { startDaemon } from "../src/api.js";
 import type { Engine } from "../src/engine.js";
-import { startTunnel } from "../src/tunnel.js";
+import { startTunnel } from "@companion/shared/tunnel-client";
 
 const secret = "s".repeat(40);
 

@@ -14,6 +14,8 @@ const config: InfraConfig = {
   budgetUsd: 20,
   alertEmail: "ops@example.com",
   imageRef: `ghcr.io/example/companion@sha256:${"a".repeat(64)}`,
+  hostCommit: "c".repeat(40),
+  hostAmi: "ami-0123456789abcdef0",
   relayDomain: "relay.example.com",
   // A registry image, so synthesis in tests does not stage the repo as an asset.
   relayImageRef: `ghcr.io/example/relay@sha256:${"b".repeat(64)}`,
@@ -30,6 +32,7 @@ function templates() {
     roles: get("CompanionVmRoles"),
     budget: get("CompanionBudget"),
     image: get("CompanionVmImage"),
+    host: get("CompanionVmHost"),
     relayCert: get("CompanionRelayCert"),
     relay: get("CompanionRelay"),
   };
@@ -56,12 +59,14 @@ describe("VM network", () => {
 });
 
 describe("VM roles", () => {
-  it("gives only the image builder an instance profile, never a user VM", () => {
+  it("gives instance profiles only to the image builder and the host, never a user's computer", () => {
     const { roles } = templates();
-    roles.resourceCountIs("AWS::IAM::InstanceProfile", 1);
-    roles.hasResourceProperties("AWS::IAM::InstanceProfile", {
-      InstanceProfileName: "companion-image-builder",
-    });
+    roles.resourceCountIs("AWS::IAM::InstanceProfile", 2);
+    for (const name of ["companion-image-builder", "companion-host"]) {
+      roles.hasResourceProperties("AWS::IAM::InstanceProfile", {
+        InstanceProfileName: name,
+      });
+    }
   });
 
   it("lets the control-plane account assume the provisioner", () => {
@@ -90,29 +95,70 @@ describe("VM roles", () => {
     });
   });
 
-  it("limits start, stop and terminate to tagged instances", () => {
-    const { roles } = templates();
-    const policies = roles.findResources("AWS::IAM::Policy");
-    const statements = Object.values(policies).flatMap(
+  function statementsOf(template: ReturnType<typeof templates>["roles"]) {
+    return Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
       (p) => p.Properties.PolicyDocument.Statement as Record<string, unknown>[],
     );
-    const lifecycle = statements.filter((s) =>
-      JSON.stringify(s.Action).includes("TerminateInstances"),
+  }
+
+  it("lets the provisioner create volumes only if they are encrypted and tagged, and touch no instance", () => {
+    const { roles } = templates();
+    const provisioner = Object.values(
+      roles.findResources("AWS::IAM::Policy"),
+    ).find((p) =>
+      JSON.stringify(p.Properties.Roles).includes("ProvisionerRole"),
     );
-    expect(lifecycle).toHaveLength(1);
-    // Releasing a failed attempt's data disk is allowed only on tagged machines and disks.
-    const release = statements.filter((s) =>
-      JSON.stringify(s.Action).includes("ModifyInstanceAttribute"),
+    const statements = provisioner!.Properties.PolicyDocument.Statement as {
+      Action: unknown;
+      Condition?: unknown;
+    }[];
+    const actions = statements.flatMap((s) => [s.Action].flat() as string[]);
+    expect(actions.sort()).toEqual([
+      "ec2:CreateTags",
+      "ec2:CreateVolume",
+      "ec2:DescribeVolumes",
+    ]);
+    const create = statements.find((s) =>
+      JSON.stringify(s.Action).includes("CreateVolume"),
     );
-    expect(release).toHaveLength(1);
-    expect(JSON.stringify(release[0]?.Condition)).toContain(
-      "ec2:ResourceTag/companion:managed",
+    expect(JSON.stringify(create?.Condition)).toContain(
+      "aws:RequestTag/companion:managed",
     );
-    expect(JSON.stringify(release[0]?.Resource)).toContain("volume/");
-    expect(JSON.stringify(lifecycle[0]?.Condition)).toContain(
-      "ec2:ResourceTag/companion:managed",
+    expect(JSON.stringify(create?.Condition)).toContain(
+      '"ec2:Encrypted":"true"',
     );
-    const wake = statements.filter(
+  });
+
+  it("limits the host to attaching tagged volumes and reading its own parameters", () => {
+    const { roles } = templates();
+    const host = Object.values(roles.findResources("AWS::IAM::Policy")).find(
+      (p) => JSON.stringify(p.Properties.Roles).includes("HostRole"),
+    );
+    const statements = host!.Properties.PolicyDocument.Statement as {
+      Action: unknown;
+      Resource: unknown;
+      Condition?: unknown;
+    }[];
+    const attach = statements.filter((s) =>
+      JSON.stringify(s.Action).includes("AttachVolume"),
+    );
+    expect(attach).toHaveLength(2);
+    for (const statement of attach) {
+      expect(JSON.stringify(statement.Condition)).toContain(
+        "ec2:ResourceTag/companion:managed",
+      );
+    }
+    const parameters = statements.find((s) =>
+      JSON.stringify(s.Action).includes("ssm:GetParameter"),
+    );
+    expect(JSON.stringify(parameters?.Resource)).toContain(
+      "parameter/companion/host/*",
+    );
+  });
+
+  it("lets a scheduled wake start only tagged instances", () => {
+    const { roles } = templates();
+    const wake = statementsOf(roles).filter(
       (s) => JSON.stringify(s.Action) === '"ec2:StartInstances"',
     );
     expect(wake).toHaveLength(1);
@@ -164,6 +210,7 @@ describe("loadConfig", () => {
     CDK_DEFAULT_ACCOUNT: "111111111111",
     COMPANION_ALERT_EMAIL: "a@b.co",
     COMPANION_IMAGE_REF: config.imageRef,
+    COMPANION_HOST_COMMIT: config.hostCommit,
   };
 
   it("uses one account for both roles until told otherwise", () => {
@@ -185,70 +232,28 @@ describe("loadConfig", () => {
 });
 
 describe("VM image", () => {
-  it("launches user VMs with metadata v2 only and no instance role", () => {
-    const { image } = templates();
-    const [template] = Object.values(
-      image.findResources("AWS::EC2::LaunchTemplate"),
-    );
-    const data = template!.Properties.LaunchTemplateData;
-    expect(data.MetadataOptions.HttpTokens).toBe("required");
-    expect(data.MetadataOptions.HttpPutResponseHopLimit).toBe(1);
-    expect(data.IamInstanceProfile).toBeUndefined();
-  });
-
-  it("keeps user data on a separate disk that outlives the machine", () => {
-    const { image } = templates();
-    const [template] = Object.values(
-      image.findResources("AWS::EC2::LaunchTemplate"),
-    );
-    const disks = template!.Properties.LaunchTemplateData
-      .BlockDeviceMappings as {
-      DeviceName: string;
-      Ebs: Record<string, unknown>;
-    }[];
-    const data = disks.find((disk) => disk.DeviceName === "/dev/sdf");
-    expect(data?.Ebs.DeleteOnTermination).toBe(false);
-    expect(data?.Ebs.Encrypted).toBe(true);
-    expect(
-      disks.find((disk) => disk.DeviceName === "/dev/sda1")?.Ebs
-        .DeleteOnTermination,
-    ).toBe(true);
-  });
-
-  it("tags every user VM and its disks so roles can find them", () => {
-    const { image } = templates();
-    image.hasResourceProperties("AWS::EC2::LaunchTemplate", {
-      LaunchTemplateData: {
-        TagSpecifications: [
-          {
-            ResourceType: "instance",
-            Tags: [{ Key: "companion:managed", Value: "true" }],
-          },
-          {
-            ResourceType: "volume",
-            Tags: [{ Key: "companion:managed", Value: "true" }],
-          },
-        ],
-      },
-    });
-  });
-
-  it("uses the empty firewall, never a new one with inbound rules", () => {
-    const { image } = templates();
-    image.resourceCountIs("AWS::EC2::SecurityGroup", 0);
-    image.resourceCountIs("AWS::EC2::SecurityGroupIngress", 0);
-  });
-
-  it("builds on Ubuntu 24.04 arm64 and runs the host test before publishing", () => {
+  it("builds on Ubuntu 24.04 x86 and runs the host test before publishing", () => {
     const { image } = templates();
     image.hasResourceProperties("AWS::ImageBuilder::ImageRecipe", {
       ParentImage:
-        "arn:aws:imagebuilder:ap-south-1:aws:image/ubuntu-server-24-lts-arm64/x.x.x",
+        "arn:aws:imagebuilder:ap-south-1:aws:image/ubuntu-server-24-lts-x86/x.x.x",
     });
     image.hasResourceProperties("AWS::ImageBuilder::ImagePipeline", {
       ImageTestsConfiguration: { ImageTestsEnabled: true },
     });
     image.resourceCountIs("AWS::ImageBuilder::Component", 2);
+  });
+
+  it("passes the image digest and the commit to the install script", () => {
+    const components = Object.values(
+      templates().image.findResources("AWS::ImageBuilder::Component"),
+    );
+    const build = components.find((c) =>
+      String(c.Properties.Name).includes("-build-"),
+    );
+    expect(String(build?.Properties.Data)).toContain(
+      `bash /tmp/build-host.sh ${config.imageRef} ${config.hostCommit}`,
+    );
   });
 
   it("writes each component as a list of named phases, as Image Builder requires", () => {
@@ -272,6 +277,57 @@ describe("VM image", () => {
       { InstanceProfileName: "companion-image-builder" },
     );
   });
+
+  it("uses the empty firewall, never a new one with inbound rules", () => {
+    const { image, host } = templates();
+    for (const template of [image, host]) {
+      template.resourceCountIs("AWS::EC2::SecurityGroup", 0);
+      template.resourceCountIs("AWS::EC2::SecurityGroupIngress", 0);
+    }
+  });
+});
+
+describe("VM host", () => {
+  function hostTemplate() {
+    const { host } = templates();
+    const [template] = Object.values(
+      host.findResources("AWS::EC2::LaunchTemplate"),
+    );
+    return template!.Properties.LaunchTemplateData;
+  }
+
+  it("runs on one instance with nested virtualization, metadata v2 only and the host's role", () => {
+    const data = hostTemplate();
+    expect(data.CpuOptions.NestedVirtualization).toBe("enabled");
+    expect(data.MetadataOptions.HttpTokens).toBe("required");
+    expect(data.MetadataOptions.HttpPutResponseHopLimit).toBe(1);
+    expect(data.IamInstanceProfile).toEqual({ Name: "companion-host" });
+    templates().host.resourceCountIs("AWS::EC2::Instance", 1);
+  });
+
+  it("encrypts its disk and carries the managed tag", () => {
+    const data = hostTemplate();
+    expect(data.BlockDeviceMappings[0].Ebs.Encrypted).toBe(true);
+    templates().host.hasResourceProperties("AWS::EC2::Instance", {
+      Tags: [
+        { Key: "companion:managed", Value: "true" },
+        { Key: "Name", Value: "companion-host" },
+      ],
+    });
+  });
+
+  it("is told where the relay is and where its token lives, but is not given the token", () => {
+    const text = JSON.stringify(hostTemplate().UserData);
+    expect(text).toBeDefined();
+    const decoded = JSON.stringify(templates().host.toJSON());
+    expect(decoded).toContain("COMPANION_HOST_PARAMS_PREFIX=/companion/host");
+    expect(decoded).not.toMatch(/COMPANION_HOST_TOKEN|relayToken/);
+  });
+
+  it("is built only once a host image exists", () => {
+    const app = buildApp({ ...config, hostAmi: undefined });
+    expect(app.node.tryFindChild("CompanionVmHost")).toBeUndefined();
+  });
 });
 
 describe("image reference", () => {
@@ -291,8 +347,22 @@ describe("image reference", () => {
 
   it("accepts an image pinned by digest", () => {
     expect(
-      loadConfig({ ...base, COMPANION_IMAGE_REF: config.imageRef }).imageRef,
+      loadConfig({
+        ...base,
+        COMPANION_IMAGE_REF: config.imageRef,
+        COMPANION_HOST_COMMIT: config.hostCommit,
+      }).imageRef,
     ).toBe(config.imageRef);
+  });
+
+  it("needs a full commit for the host agent", () => {
+    expect(() =>
+      loadConfig({
+        ...base,
+        COMPANION_IMAGE_REF: config.imageRef,
+        COMPANION_HOST_COMMIT: "main",
+      }),
+    ).toThrow(/commit/);
   });
 });
 
@@ -383,6 +453,7 @@ describe("relay config", () => {
         CDK_DEFAULT_ACCOUNT: "111111111111",
         COMPANION_ALERT_EMAIL: "ops@example.com",
         COMPANION_IMAGE_REF: config.imageRef,
+        COMPANION_HOST_COMMIT: config.hostCommit,
         COMPANION_RELAY_IMAGE_REF: "ghcr.io/example/relay:latest",
       }),
     ).toThrow(/digest/);

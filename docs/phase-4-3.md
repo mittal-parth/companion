@@ -79,7 +79,7 @@ Run the daemon with `COMPANION_RELAY_URL=wss://relay.example.com` and the first 
 - `/health` on the relay is the relay's own health check, so the daemon's `/health` is not reachable through it. Any other daemon route is.
 - A request body can be about 24 MB (a websocket message is capped at 32 MB, and base64 adds a third). Images are capped at 5 MB each.
 - Nothing slows a fast daemon for a slow reader. Chat events are small, so this does not matter yet; live view (Task 7.1) will need it.
-- The relay does not wake a stopped VM. That is Task 4.5.
+- The relay does not wake a stopped VM. That is Task 4.5a.
 
 ## Sequence diagrams
 

@@ -1,0 +1,16 @@
+{
+  "name": "@companion/host",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/agent.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ec2": "^3.1168.0",
+    "@companion/shared": "workspace:*",
+    "@aws-sdk/client-ssm": "^3.1168.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2"
+  }
+}

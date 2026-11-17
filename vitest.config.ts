@@ -7,6 +7,7 @@ export default defineConfig({
       "packages/shared/**/*.test.ts",
       "apps/web/**/*.test.ts",
       "apps/relay/**/*.test.ts",
+      "apps/host/**/*.test.ts",
       "infra/**/*.test.ts",
     ],
     // `cdk synth` stages a copy of the repo here as the relay's build input.

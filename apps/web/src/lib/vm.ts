@@ -8,11 +8,11 @@
  * the row where it was, and the next call carries on.
  *
  * Double provisioning is stopped three ways: the database lets one caller
- * claim a user, EC2 gets a token that repeats for the same attempt, and the
- * machine is looked up by tag before any launch.
+ * claim a user, the data volume is looked up by owner before it is created
+ * and created with a token that repeats, and a host treats a repeated start
+ * of the same user's computer as a no-op.
  */
 import {
-  NoCapacityError,
   vmLaunchTimeoutMs,
   vmStatus,
   type ReconcileDeps,
@@ -46,43 +46,44 @@ export async function reconcile(
 }
 
 /**
- * Starts the machine for a claimed attempt. An attempt that already launched
- * one (a crash between launching and saving) is found by tag and reused. A
- * full zone is skipped once for the next zone. Any other failure leaves the
- * row as it is so the next call tries again, until the time limit.
+ * Gives a claimed attempt its data volume, then asks a host to run the
+ * computer. The volume is looked up by owner first, so a crash after creating
+ * it, or a Try again after a failure, reuses it and never makes a second.
+ * Any other failure leaves the row as it is so the next call tries again,
+ * until the time limit.
  */
 async function launch(row: VmRow, deps: ReconcileDeps): Promise<VmRow> {
   if (timedOut(row, deps)) return fail(row, deps);
-  const { cloud, store } = deps;
-  let id = (await cloud.find(row))?.id;
-  for (let zone = 0; id === undefined && zone < cloud.zones; zone++) {
+  const { volumes, store } = deps;
+  let volumeId = row.volumeId ?? (await volumes.find(row.userId));
+  if (volumeId === null) {
     try {
-      id = await cloud.launch(row, zone);
+      volumeId = await volumes.create(row.userId);
     } catch (error) {
-      if (!(error instanceof NoCapacityError)) {
-        console.error("launching a user VM failed", error);
-        return row;
-      }
+      console.error("creating a user's data volume failed", error);
+      return row;
     }
   }
-  if (id === undefined) return row;
-  await store.update(row, { state: "booting", instanceId: id });
-  return { ...row, state: "booting", instanceId: id };
+  await store.update(row, { state: "booting", volumeId });
+  return { ...row, state: "booting", volumeId };
 }
 
 /**
- * Watches a launched machine until it is usable: running in EC2 and answering
- * through the relay, which also means the daemon started. A machine that
- * vanished, or one that is not usable in time, is cleaned up and the attempt
- * fails so nothing keeps costing money behind a failed screen.
+ * Watches a computer until it is usable: a host is running it and its daemon
+ * answers through the relay. Starting is repeated on every call because it is
+ * harmless, which also restarts a computer that stopped before it was ready.
+ * One that is not usable in time fails the attempt; the user's volume stays.
  */
 async function boot(row: VmRow, deps: ReconcileDeps): Promise<VmRow> {
-  const { cloud, store } = deps;
-  const id = row.instanceId;
-  if (id === null) return { ...row, state: "launching" };
-  const instance = await cloud.describe(id);
-  if (instance === "gone") return fail(row, deps);
-  if (instance === "running" && (await deps.probe(row.userId))) {
+  const { hosts, store } = deps;
+  if (row.volumeId === null) return { ...row, state: "launching" };
+  try {
+    await hosts.start({ ...row, volumeId: row.volumeId });
+  } catch (error) {
+    // No room, or the host is unreachable: try again on the next call.
+    console.error("starting a user's computer failed", error);
+  }
+  if (await deps.probe(row.userId)) {
     await store.update(row, { state: "ready" });
     return { ...row, state: "ready" };
   }
@@ -93,15 +94,11 @@ function timedOut(row: VmRow, deps: ReconcileDeps): boolean {
   return deps.now() - Date.parse(row.attemptStartedAt) > vmLaunchTimeoutMs;
 }
 
-/** Marks the attempt failed and deletes what it created. */
+/**
+ * Marks the attempt failed. The data volume is kept: it is the user's, it may
+ * hold their work, and a retry reuses it.
+ */
 async function fail(row: VmRow, deps: ReconcileDeps): Promise<VmRow> {
-  // A crash between launching and saving leaves a machine only the tag knows.
-  const id = row.instanceId ?? (await deps.cloud.find(row))?.id;
-  if (id !== undefined) {
-    await deps.cloud.destroy(id).catch((error) => {
-      console.error("cleaning up a failed VM failed", error);
-    });
-  }
   await deps.store.update(row, { state: "failed" });
   return { ...row, state: "failed" };
 }

@@ -1,5 +1,6 @@
 # The companion daemon with everything a bot's computer needs: OpenCode, a
-# virtual screen, Chrome and the desktop tools. Linux arm64 only (ADR 0004).
+# virtual screen, Chrome and the desktop tools. Linux x86_64 only (ADR 0005).
+# It runs as a container in CI, and as the root filesystem of a user's microVM.
 #
 # The image holds no secret and no per-user state. Keys arrive at run time and
 # everything the daemon keeps lives on the volume mounted at /data.
@@ -31,11 +32,11 @@ RUN CI=true pnpm install --frozen-lockfile
 # --- The runtime image ---
 FROM ubuntu:24.04 AS runtime
 ARG OPENCODE_VERSION=2.2.6
-ARG OPENCODE_SHA256=f2d27600c367e45057d6a16f6a5c2aa8d77b41a9b10d4bc3d849c2f88870e944
+ARG OPENCODE_SHA256=08bb21d6326ce740d91cce7ebe88a6536933f6e1e30353b91a06b01f25da306c
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN test "$(dpkg --print-architecture)" = "arm64" \
- || { echo "This image is arm64 only (see docs/adr/0004-arm-images.md)"; exit 1; }
+RUN test "$(dpkg --print-architecture)" = "amd64" \
+ || { echo "This image is x86_64 only (see docs/adr/0005-microvms-on-shared-hosts.md)"; exit 1; }
 
 # What the daemon starts on first use: Xvfb, Openbox, the session and
 # accessibility buses, and the apps a bot may launch. Fonts so pages render.
@@ -44,13 +45,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xvfb openbox dbus at-spi2-core mousepad galculator \
       fonts-liberation fonts-noto-core fonts-noto-color-emoji \
  && curl -fsSLo /tmp/chrome.deb \
-      https://dl.google.com/linux/direct/google-chrome-stable_current_arm64.deb \
+      https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
  && apt-get install -y --no-install-recommends /tmp/chrome.deb \
  && rm -rf /tmp/chrome.deb /var/lib/apt/lists/*
 
 # OpenCode comes from its GitHub release, pinned by checksum.
 RUN curl -fsSLo /tmp/opencode.tar.gz \
-      "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-arm64.tar.gz" \
+      "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz" \
  && echo "${OPENCODE_SHA256}  /tmp/opencode.tar.gz" | sha256sum -c - \
  && tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin opencode \
  && rm /tmp/opencode.tar.gz
@@ -66,7 +67,11 @@ RUN userdel -r ubuntu \
  && useradd --uid 1000 --create-home --shell /bin/bash companion \
  && mkdir /data && chown companion:companion /data
 
-# Fails the build if any tool we ship is not a working arm64 binary.
+# A microVM's root filesystem is read only, so the tools' binaries must already
+# be executable: agent-browser would otherwise try to make itself so on first run.
+RUN find /app/node_modules/.pnpm \( -path '*/agent-browser/bin/agent-browser-linux-*' -o -path '*/agent-desktop/bin/*linux*' \) -type f -exec chmod 755 {} +
+
+# Fails the build if any tool we ship is not a working x86_64 binary.
 RUN node --version && opencode --version && google-chrome --version \
  && node /app/apps/daemon/node_modules/agent-browser/bin/agent-browser.js --version \
  && /app/apps/daemon/node_modules/.bin/agent-desktop --version
