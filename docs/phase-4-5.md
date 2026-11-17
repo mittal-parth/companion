@@ -100,6 +100,28 @@ Things this run showed:
 - The script's first pass check matched the bot's thought, which quotes the prompt. It now waits for the turn to end and rejects a reply that admits the tool failed.
 - A host replaced (not rebooted) loses the agent's saved list, and in this task `reconcile` does not restart a `ready` computer. Restart after host loss is part of 4.5a.
 
+## Measured on the deployed host (2026-11-17)
+
+One `m8i.xlarge` in `ap-south-1a` from a pipeline-built AMI (commit `414c228`), the real relay, real encrypted 20 GiB gp3 volumes, computers of 2 GiB and 2 vCPUs. Every time is from the laptop, through the relay, to the daemon answering `/health`. The scripts are `infra/spike/firecracker/`.
+
+| Question                                                                              | Result                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| First provision for a new user (create the volume, attach it, boot, daemon reachable) | Volume created and available in about 2.2 s, then the daemon answered 4.8 to 6.1 s after the start request: **about 7 s in total**. The very first computer after the host booted took **62 s** (once; cause not found, probably cold root image and first attach).       |
+| Wake after sleep, same host, real EBS volume (stop, detach, then start, attach, boot) | **4.7 to 5.1 s** (3 runs). The start request answers in 0.1 s.                                                                                                                                                                                                            |
+| Sleep (stop the computer and detach the volume)                                       | **8.3 s** to the delete answer, volume available after 8.8 s.                                                                                                                                                                                                             |
+| Wake on a different host                                                              | Not measured (one host). Worst case is the old host's 8.8 s detach plus about 5 s: **about 14 s**. If the old host has already detached, about 5 s.                                                                                                                       |
+| Density                                                                               | 12 computers (the agent's capacity) started one after another in 4.9 to 6.1 s each, so no slowdown with load. The 13th was refused with 507. With Chrome open in all 12 at once, all 12 daemons kept answering and the host kept all 12 running.                          |
+| Isolation, from inside a guest, by asking a bot to run commands                       | Metadata address, another guest's address (two tried), the host's address, a VPC address: **all blocked** (timeout). The internet works (200). Guests are on `100.64.0.6`, `.10`, `.14`.                                                                                  |
+| Cost                                                                                  | Host `m8i.xlarge` in `ap-south-1`: $0.2227 per hour, **$162.6 a month** always on. Volume: gp3 at $0.0912 per GB-month, **$1.82** for 20 GiB. At 12 computers per host: **about $15.4 per user per month**, whatever the hours (a full host; fewer users cost more each). |
+| Placement                                                                             | Still one host (`host-1`). No scheduler. A user who returns should go to the host that still has the volume.                                                                                                                                                              |
+
+Findings:
+
+- **The VM token is visible to bots.** In a guest, `env | grep -i token` printed `COMPANION_VM_TOKEN`. The daemon removes it from its own environment (`apps/daemon/src/main.ts:40`), but the bot's shell still sees it, so a bot can read the relay token that lets a daemon connect as this user. Needs a fix before real users.
+- **The browser works; the `skill` tool is what fails.** A bot asked to use the browser tried to load a skill named `browser` and got `Permission denied: skill`. Told to run `browser open ...` in bash, the same bot opened example.com in Chrome, read the title and saved a screenshot. The desktop (galculator) launched with a window. So the open problem below is the skill permission, not the guest's Chrome, display or accessibility bus.
+- **The first computer on a fresh host is slow (62 s).** Probably a one-off; check after a host boot before relying on it.
+- **A model turn through the relay and a guest works** (about 14 to 45 s for turns that run tools).
+
 ## Open: a bot's browser and desktop on the deployed host
 
 **Not working yet.** In live turns on the deployed host, a bot asked to use its browser said the browser skill was not available and fell back to a plain web fetch, and a bot asked to launch the calculator got a launch failure that mentions a missing accessibility bus. `infra/scripts/e2e-real-host.ts --tools` fails on the browser turn for this reason.

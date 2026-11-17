@@ -13,3 +13,4 @@ e2e/.auth
 
 cdk.out
 cdk.context.json
+infra/spike/firecracker/.state.json
